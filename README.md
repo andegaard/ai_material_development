@@ -16,6 +16,73 @@ All six agents plus the orchestrator are scaffolded against the v2 spec in
 `agent_instructions.md`. **Not yet run against the real API** — see
 "Before running" below for what needs checking first.
 
+### Progress log
+
+**Done:**
+- Repo hygiene: v1 prototype moved to `archive/v1_prototype/`, `.gitignore`
+  added, stray `.DS_Store` files untracked.
+- All six agents + orchestrator scaffolded from `agent_instructions.md`,
+  sharing cross-cutting policy in `common.py` (retry-with-backoff, JSON
+  validation, `PipelineHalt`, source-citation filtering).
+- **Agent 1** reworked into two phases: cheap domain+grade-name discovery,
+  then one dedicated research call per grade (capped at 15/domain) covering
+  chemical composition, mechanical properties, phase composition, heat
+  treatment, manufacturing methods, product forms, ECO fingerprint,
+  standards, applications. Both phases explicitly search the whole web, not
+  just the company's own page. Every grade is normalized against a fixed
+  template (`GRADE_TEMPLATE`) so every material has the same *topics* even
+  when a topic's data is unavailable (`null`/`[]`) — not the same chemical
+  elements, since that legitimately varies per alloy.
+- **Agent 2** reworked into two phases: a planning call grounded in Agent
+  1's actual domain data derives explicit `performance_priorities`
+  (property, direction, rationale — what "good" means for this domain) and
+  a list of research sub-topics drawn from the domain's real alloy systems;
+  then one exhaustive `web_search` call per sub-topic (capped at 15),
+  findings tagged with their source topic, unsourced findings dropped.
+- **Domain-scoping bug fixed**: `extract_manufacturing_constraints()` used
+  to merge every domain's constraints together, so two domains with
+  different limits for the same element could silently overwrite each
+  other. Agent X now resolves and records the domain it ran for in its own
+  output; Agent V picks up that same domain automatically. Verified with a
+  conflicting-limits test.
+- **Agent X broadened** beyond chemistry-only: findings' `optimizing_variable`
+  is now resolved against chemical composition, phase composition, *and*
+  heat-treatment ranges (`variable_category` tags which). Phase fractions
+  are clamped at 100%. Non-chemical variables get constraint status
+  `not_applicable` (Agent 1 has no constraints of that kind) rather than
+  the misleading `no_constraint_found`. Agent V updated to match.
+- **Swappable simulation engine**: `SimulationEngine` interface added,
+  `HeuristicLinearEngine` (flat +15% rule) is the only implementation today.
+  `CalphadEngine` is a documented, unimplemented stub — dropping in real
+  thermodynamics later (pycalphad, or Thermo-Calc TC-Python if a license is
+  available) is a matter of implementing that one class and passing
+  `AgentXSimulator(engine=CalphadEngine(...))`; nothing else in the
+  pipeline needs to change.
+
+**Explicitly not done / honest limitations:**
+- No real thermodynamic computation anywhere. `heuristic_linear_extrapolation`
+  is a flat percentage rule, not physics. `simulated_phase_fraction` and
+  `required_cooling_rate_c_s` in Agent X's output are still `null`.
+- Nothing has been run against the live Anthropic API yet — Agents 1, 2, 3,
+  4 are untested beyond code review and compile checks (Agent X and Agent V
+  don't need the API and have been exercised with mock data).
+- Agent 3 and Agent 4 have not been revisited since their initial scaffold —
+  worth a pass to check they handle the richer Agent 1/2/X data well (e.g.
+  Agent 3's prompt could mention that extrapolated parameters may be
+  phase/heat-treatment variables, not just chemistry).
+- See "Before running" below for the API-integration specifics (tool-type
+  strings, model IDs, structured outputs) still needing verification.
+
+### Next steps (pick up here)
+
+1. Review Agent V's own file in detail (`agent_v_validator.py`) — not yet
+   walked through line by line the way Agents 1/2/X were.
+2. Review Agent 3 (`agent_3_gap_analysis.py`) and Agent 4
+   (`agent_4_ip_lca_audit.py`) the same way — inputs, prompts, outputs.
+3. Review `orchestrator.py` end to end once all agents are settled.
+4. Resolve the "Before running" items, then do a real end-to-end run with a
+   live `ANTHROPIC_API_KEY` against a real company/domain.
+
 ## Layout
 
 - `agent_instructions.md` — current (v2) pipeline specification.
