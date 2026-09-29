@@ -22,22 +22,12 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
+from common import extract_manufacturing_constraints, load_json_validated, save_json_validated
+
 logging.basicConfig(level=logging.INFO, format="[Agent X] %(message)s")
 logger = logging.getLogger("agent_x")
 
 EXTRAPOLATION_FACTOR = 1.15  # +15% beyond literature max; see module docstring
-
-# Maps legacy / ad-hoc baseline constraint keys (as produced by v1-style
-# Agent 1 output, e.g. a flat "max_manganese_limit" field) to a chemical
-# element symbol, so older baseline files still work. New Agent 1 output
-# should use the `manufacturing_constraints` schema from
-# agent_instructions.md v2 directly instead of relying on this table.
-LEGACY_CONSTRAINT_KEY_MAP = {
-    "max_manganese_limit": "Mn",
-    "max_carbon_limit": "C",
-    "max_silicon_limit": "Si",
-    "max_chromium_limit": "Cr",
-}
 
 
 class AgentXSimulator:
@@ -58,15 +48,15 @@ class AgentXSimulator:
   ):
     self.extrapolated_plans: List[Dict[str, Any]] = []
 
-    self.research_data = self._load_json(
+    self.research_data = load_json_validated(
         agent_2_report_path, required_keys=["breakthrough_findings"]
     )
     logger.info("Research trend report loaded from '%s'.", agent_2_report_path)
 
     self.baseline_constraints: Dict[str, Dict[str, Any]] = {}
     if agent_1_baseline_path:
-      baseline = self._load_json(agent_1_baseline_path)
-      self.baseline_constraints = self._extract_constraints(baseline)
+      baseline = load_json_validated(agent_1_baseline_path)
+      self.baseline_constraints = extract_manufacturing_constraints(baseline)
       logger.info(
           "Loaded %d manufacturing constraint(s) from '%s'.",
           len(self.baseline_constraints), agent_1_baseline_path,
@@ -77,54 +67,6 @@ class AgentXSimulator:
           "checked against real manufacturing constraints. Every "
           "constraint check below will report 'no_constraint_found'."
       )
-
-  # ---------------------------------------------------------------- loading
-
-  @staticmethod
-  def _load_json(
-      path: str, required_keys: Optional[List[str]] = None
-  ) -> Dict[str, Any]:
-    try:
-      with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    except FileNotFoundError as exc:
-      raise FileNotFoundError(
-          f"Required input file not found: '{path}'. Check that the "
-          "upstream agent ran and wrote its output here."
-      ) from exc
-    except json.JSONDecodeError as exc:
-      raise ValueError(f"'{path}' is not valid JSON: {exc}") from exc
-
-    if required_keys:
-      missing = [k for k in required_keys if k not in data]
-      if missing:
-        raise ValueError(f"'{path}' is missing required key(s): {missing}")
-    return data
-
-  def _extract_constraints(
-      self, baseline: Dict[str, Any]
-  ) -> Dict[str, Dict[str, Any]]:
-    """Supports both the new `manufacturing_constraints` schema (nested under
-    each domain, per agent_instructions.md v2) and legacy flat keys like
-    `max_manganese_limit`, so this still works against older Agent 1 output.
-    """
-    constraints: Dict[str, Dict[str, Any]] = {}
-
-    # New schema: baseline["domains"][i]["manufacturing_constraints"]
-    for domain in baseline.get("domains", []):
-      for element, limit in domain.get("manufacturing_constraints", {}).items():
-        if isinstance(limit, dict) and "max" in limit:
-          constraints[element] = {
-              "max": limit["max"],
-              "unit": limit.get("unit", "wt%"),
-          }
-
-    # Legacy flat schema: baseline["max_manganese_limit"] etc.
-    for key, element in LEGACY_CONSTRAINT_KEY_MAP.items():
-      if key in baseline and element not in constraints:
-        constraints[element] = {"max": baseline[key], "unit": "wt%"}
-
-    return constraints
 
   # ------------------------------------------------------------ extrapolate
 
@@ -272,9 +214,11 @@ class AgentXSimulator:
         "requires_human_review": any_exceeds_limit,
     }
 
-    with open(output_path, "w", encoding="utf-8") as f:
-      json.dump(simulation_output, f, indent=2)
-    logger.info("Simulation results saved to '%s'.", output_path)
+    save_json_validated(
+        simulation_output,
+        output_path,
+        required_keys=["virtual_prototype", "simulation_mode", "extrapolated_parameters"],
+    )
 
     if any_exceeds_limit:
       logger.warning(
