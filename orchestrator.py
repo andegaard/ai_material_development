@@ -49,14 +49,18 @@ def run_pipeline(company: str, company_url: str) -> None:
   print("\n\U0001F6D1 Human-in-the-Loop Checkpoint 1: Domain Selection")
   choice = input(f"Select a domain [1-{len(domains)}] to drive Agent 2: ").strip()
   try:
-    selected_domain = domains[int(choice) - 1]["domain_name"]
+    selected_domain = domains[int(choice) - 1]
   except (ValueError, IndexError):
     raise PipelineHalt(f"Invalid domain selection: {choice!r}")
-  logger.info("Human selected domain: '%s'", selected_domain)
+  logger.info("Human selected domain: '%s'", selected_domain.get("domain_name"))
 
   logger.info("=== STEP 2: Agent 2 (Frontier Research) ===")
   agent_2 = Agent2FrontierResearch()
-  agent_2.run(selected_domain, output_path=_path("agent_2_report.json"))
+  agent_2_result = agent_2.run(selected_domain, output_path=_path("agent_2_report.json"))
+
+  print("\n--- Performance priorities identified for this domain ---")
+  for p in agent_2_result.get("performance_priorities", []):
+    print(f"- {p.get('property')} ({p.get('direction')}): {p.get('rationale')}")
 
   logger.info("=== STEP X: Agent X (Simulation & Extrapolation) ===")
   agent_x = AgentXSimulator(

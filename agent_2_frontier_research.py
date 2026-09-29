@@ -1,18 +1,44 @@
 """
 Agent 2: Frontier Research & Mechanism Hunter (v2)
 
-Searches literature/patents for cutting-edge mechanisms in a chosen steel
-domain, extracting composition ranges, phases, processing routes, and their
-correlation with mechanical properties. Every finding must cite a source;
-findings without one are dropped before Agent X ever sees them, per
-agent_instructions.md section 2.
+Two-phase design, mirroring Agent 1's per-grade pattern:
+
+  Phase A (`_plan_research`) is grounded in Agent 1's actual data for the
+  selected domain -- its description, current grades, their chemistry and
+  mechanical properties -- and from that derives:
+    - `performance_priorities`: which properties actually define success in
+      this domain and which direction is better for each, with a stated
+      rationale. This is what tells the rest of the pipeline what "good"
+      means for e.g. a Wear-Resistant domain (hardness up) versus a
+      High-Strength Structural one (yield strength up, weldability
+      preserved) -- instead of that judgment staying implicit in the model's
+      head.
+    - `research_topics`: a broad, non-redundant list of distinct mechanisms
+      / alloying strategies / processing routes worth investigating, derived
+      from the real alloy systems Agent 1 already found for this domain
+      rather than guessed cold.
+
+  Phase B (`_research_topic`) runs one dedicated, `web_search`-heavy call
+  per topic (capped at `MAX_RESEARCH_TOPICS_PER_DOMAIN`), each told to keep
+  issuing new search queries on that specific sub-topic until it has
+  surfaced the distinct findings/sources actually available -- this
+  decomposition, not a single broad call, is what gets meaningfully broader
+  literature coverage than "the first 5 hits". No search-based approach can
+  read literally everything ever published; running many focused calls
+  instead of one is the real lever available here.
+
+Every finding is tagged with the sub-topic that produced it (for
+traceability) and must carry at least one source -- unsourced findings are
+dropped before Agent X ever sees them, per agent_instructions.md section 2.
 """
 
+import json
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from common import (
     WEB_SEARCH_TOOL,
+    PipelineHalt,
     call_with_retry,
     extract_json_object,
     extract_text,
@@ -26,18 +52,54 @@ logger = logging.getLogger("agent_2")
 
 MODEL = "claude-opus-5-5"
 ESCALATED_MODEL = "claude-fable-5-1"  # for the most demanding synthesis cases
+MAX_RESEARCH_TOPICS_PER_DOMAIN = 15  # bounds cost/runtime; raise if needed
 
-SYSTEM_PROMPT = """You are an academic metallurgist and trend analyst doing
-open-ended frontier research. Explore broadly to catch "unknown unknowns",
-but every claim must be grounded: cite at least one real source for every
-finding.
+REQUIRED_OUTPUT_KEYS = [
+    "domain", "performance_priorities", "research_topics_investigated", "breakthrough_findings",
+]
+
+PLANNING_SYSTEM_PROMPT = """You are an academic metallurgist and trend
+analyst planning a frontier-research scan for one specific steel domain.
+
+You are given the company's own current portfolio data for this domain:
+its description, its existing grades, and their known chemistry and
+mechanical properties. Use this as your baseline -- what "improvement" means
+here is "better than what these current grades already achieve".
 
 Output ONLY a single JSON object (in a ```json code fence) matching exactly
 this schema, with no other commentary:
 
 {
-  "domain": "string",
-  "breakthrough_findings": [
+  "performance_priorities": [
+    {"property": "string", "direction": "maximize | minimize | balance", "rationale": "string"}
+  ],
+  "research_topics": ["string", "..."]
+}
+
+1. "performance_priorities": identify the properties that actually define
+   success in this domain, and which direction is better for each. Ground
+   this explicitly in the domain description and the current grades' own
+   properties -- do not just assert a generic answer.
+2. "research_topics": propose a broad, non-redundant list of distinct
+   mechanisms, alloying strategies, or processing routes worth investigating
+   to improve on those priorities beyond the current grades. Draw on the
+   real alloy systems already present in the current grades' chemistry
+   rather than generic topics unrelated to what this company actually makes.
+"""
+
+TOPIC_SYSTEM_PROMPT = """You are an academic metallurgist doing an
+exhaustive literature and patent search on ONE specific, narrow sub-topic
+within a steel domain. Keep issuing new search queries with different
+phrasings and angles until you have surfaced the distinct findings and
+sources actually available on this sub-topic -- do not stop after the first
+one or two hits. Every claim must be grounded: cite at least one real source
+for every finding.
+
+Output ONLY a single JSON object (in a ```json code fence) matching exactly
+this schema, with no other commentary:
+
+{
+  "findings": [
     {
       "mechanism": "string",
       "performance_correlation": "positive | negative | neutral",
@@ -49,55 +111,116 @@ this schema, with no other commentary:
   ]
 }
 
-Omit any finding you cannot cite at least one source for. Do not fabricate
-sources.
+Judge "performance_correlation" against the performance priorities you are
+given, not a generic notion of "better". Report as many distinct findings as
+you can actually source -- do not pad with duplicates or invent findings you
+cannot cite. Omit any finding you cannot cite at least one source for.
 """
-
-REQUIRED_OUTPUT_KEYS = ["domain", "breakthrough_findings"]
 
 
 class Agent2FrontierResearch:
-  def __init__(self, escalate: bool = False):
+  def __init__(self, escalate: bool = False, max_topics_per_domain: int = MAX_RESEARCH_TOPICS_PER_DOMAIN):
     self.client = get_anthropic_client()
     self.model = ESCALATED_MODEL if escalate else MODEL
+    self.max_topics_per_domain = max_topics_per_domain
 
-  def run(self, domain: str, output_path: str = "agent_2_report.json") -> Dict[str, Any]:
+  def run(self, domain: Dict[str, Any], output_path: str = "agent_2_report.json") -> Dict[str, Any]:
+    domain_name = domain.get("domain_name", "unknown domain")
+    logger.info("Planning research for domain '%s' with %s...", domain_name, self.model)
+
+    plan = self._plan_research(domain)
+    priorities = plan.get("performance_priorities", [])
+    topics = plan.get("research_topics", [])
+
+    if len(topics) > self.max_topics_per_domain:
+      logger.warning(
+          "Planning proposed %d research topics; investigating only the "
+          "first %d (max_topics_per_domain=%d).",
+          len(topics), self.max_topics_per_domain, self.max_topics_per_domain,
+      )
+    topics = topics[: self.max_topics_per_domain]
+
+    all_findings: List[Dict[str, Any]] = []
+    for topic in topics:
+      all_findings.extend(self._research_topic(domain_name, topic, priorities))
+
+    all_findings = require_sources(all_findings, entry_label="finding")
+
+    result = {
+        "domain": domain_name,
+        "performance_priorities": priorities,
+        "research_topics_investigated": topics,
+        "breakthrough_findings": all_findings,
+    }
+    save_json_validated(result, output_path, required_keys=REQUIRED_OUTPUT_KEYS)
     logger.info(
-        "Researching frontier mechanisms for domain '%s' with %s...", domain, self.model
+        "Wrote %d sourced finding(s) across %d topic(s) to '%s'.",
+        len(all_findings), len(topics), output_path,
     )
+    return result
 
+  def _plan_research(self, domain: Dict[str, Any]) -> Dict[str, Any]:
     user_message = (
-        f"Steel domain: {domain}\n\n"
-        "Search literature and patents for cutting-edge mechanisms in this "
-        "domain. Extract chemical composition ranges, microstructural "
-        "phases, processing routes, and their correlation with mechanical "
-        "properties."
+        "Here is the company's current portfolio data for this domain:\n\n"
+        + json.dumps(domain, indent=2)
+        + "\n\nIdentify the domain's performance priorities and propose a "
+        "research topic list, per your instructions."
     )
 
     def make_call():
       return self.client.messages.create(
           model=self.model,
-          max_tokens=4000,
-          system=SYSTEM_PROMPT,
+          max_tokens=2000,
+          system=PLANNING_SYSTEM_PROMPT,
+          messages=[{"role": "user", "content": user_message}],
+      )
+
+    response = call_with_retry(make_call, label="Agent 2 research planning call")
+    return extract_json_object(extract_text(response))
+
+  def _research_topic(
+      self, domain_name: str, topic: str, priorities: List[Dict[str, Any]]
+  ) -> List[Dict[str, Any]]:
+    logger.info("Researching sub-topic '%s'...", topic)
+
+    user_message = (
+        f"Domain: {domain_name}\nSub-topic: {topic}\n\n"
+        f"Performance priorities for this domain:\n{json.dumps(priorities, indent=2)}\n\n"
+        "Exhaustively search literature and patents on this specific sub-topic."
+    )
+
+    def make_call():
+      return self.client.messages.create(
+          model=self.model,
+          max_tokens=3000,
+          system=TOPIC_SYSTEM_PROMPT,
           tools=[WEB_SEARCH_TOOL],
           messages=[{"role": "user", "content": user_message}],
       )
 
-    response = call_with_retry(make_call, label="Agent 2 literature research call")
-    result = extract_json_object(extract_text(response))
+    try:
+      response = call_with_retry(make_call, label=f"Agent 2 topic research call ({topic})")
+      data = extract_json_object(extract_text(response))
+    except PipelineHalt as exc:
+      logger.warning("Could not research sub-topic '%s': %s. Skipping.", topic, exc)
+      return []
 
-    result["breakthrough_findings"] = require_sources(
-        result.get("breakthrough_findings", []), entry_label="finding"
-    )
-
-    save_json_validated(result, output_path, required_keys=REQUIRED_OUTPUT_KEYS)
-    logger.info(
-        "Wrote %d sourced finding(s) to '%s'.",
-        len(result["breakthrough_findings"]), output_path,
-    )
-    return result
+    findings = data.get("findings", [])
+    for finding in findings:
+      finding["research_topic"] = topic
+    return findings
 
 
 if __name__ == "__main__":
+  mock_domain = {
+      "domain_name": "Wear-Resistant Steels",
+      "domain_description": "Steels for abrasive wear applications such as buckets, chutes, and crushing equipment.",
+      "manufacturing_constraints": {"Mn": {"max": 1.6, "unit": "wt%"}},
+      "grades": [{
+          "grade_name": "Wear-Resistant 400",
+          "chemical_composition": {"C": {"min": 0.2, "max": 0.3, "unit": "wt%"}},
+          "mechanical_properties": {"hardness": {"value": 400, "scale": "HBW"}},
+      }],
+  }
   agent_2 = Agent2FrontierResearch()
-  agent_2.run(domain="Wear-Resistant Steels")
+  agent_2.run(mock_domain)
