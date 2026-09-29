@@ -11,11 +11,14 @@ independent code path is a stronger check than another model call would be.
 Reuses `common.extract_manufacturing_constraints`, the same function Agent X
 uses, so "independent" means "re-derives the check from the same baseline",
 not "re-implements a subtly different parser that could disagree by
-accident".
+accident". Scoped to the same domain as Agent X too: Agent X now writes the
+domain it ran for into its own output, so Agent V reads that instead of
+merging every domain's constraints together (which could otherwise silently
+check an extrapolated value against the wrong domain's limit).
 """
 
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from common import extract_manufacturing_constraints, load_json_validated, save_json_validated
 
@@ -24,12 +27,19 @@ logger = logging.getLogger("agent_v")
 
 
 class AgentVValidator:
-  def __init__(self, agent_1_baseline_path: str, agent_x_simulation_path: str):
+  def __init__(
+      self,
+      agent_1_baseline_path: str,
+      agent_x_simulation_path: str,
+      domain_name: Optional[str] = None,
+  ):
     baseline = load_json_validated(agent_1_baseline_path, required_keys=["domains"])
     self.simulation = load_json_validated(
         agent_x_simulation_path, required_keys=["extrapolated_parameters"]
     )
-    self.constraints = extract_manufacturing_constraints(baseline)
+    if domain_name is None:
+      domain_name = self.simulation.get("domain")
+    self.constraints = extract_manufacturing_constraints(baseline, domain_name=domain_name)
 
   def validate(self) -> List[Dict[str, Any]]:
     findings = []

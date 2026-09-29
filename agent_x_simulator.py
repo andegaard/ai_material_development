@@ -45,6 +45,7 @@ class AgentXSimulator:
       self,
       agent_2_report_path: str,
       agent_1_baseline_path: Optional[str] = None,
+      domain_name: Optional[str] = None,
   ):
     self.extrapolated_plans: List[Dict[str, Any]] = []
 
@@ -53,13 +54,22 @@ class AgentXSimulator:
     )
     logger.info("Research trend report loaded from '%s'.", agent_2_report_path)
 
+    # Agent 2's report is scoped to one domain (`self.research_data["domain"]`).
+    # Default to that domain's own constraints rather than merging every
+    # domain in the baseline together, unless the caller overrides it. This
+    # resolved name is also written into our own output file below, so
+    # Agent V can pick up the same domain automatically.
+    if domain_name is None:
+      domain_name = self.research_data.get("domain")
+    self.domain_name = domain_name
+
     self.baseline_constraints: Dict[str, Dict[str, Any]] = {}
     if agent_1_baseline_path:
       baseline = load_json_validated(agent_1_baseline_path)
-      self.baseline_constraints = extract_manufacturing_constraints(baseline)
+      self.baseline_constraints = extract_manufacturing_constraints(baseline, domain_name=domain_name)
       logger.info(
-          "Loaded %d manufacturing constraint(s) from '%s'.",
-          len(self.baseline_constraints), agent_1_baseline_path,
+          "Loaded %d manufacturing constraint(s) for domain '%s' from '%s'.",
+          len(self.baseline_constraints), domain_name, agent_1_baseline_path,
       )
     else:
       logger.warning(
@@ -196,6 +206,7 @@ class AgentXSimulator:
 
     simulation_output = {
         "virtual_prototype": "Prototype_Extrapolated_X1",
+        "domain": self.domain_name,
         "simulation_mode": "heuristic_linear_extrapolation",
         "extrapolated_parameters": self.extrapolated_plans,
         # Placeholder values -- NOT derived from a real simulation. Do not
@@ -249,6 +260,7 @@ if __name__ == "__main__":
     json.dump(mock_agent_1_baseline, f, indent=2)
 
   mock_agent_2_report = {
+      "domain": "Wear-Resistant",
       "breakthrough_findings": [{
           "mechanism": "Retained austenite stabilization via Si/Mn partitioning",
           "performance_correlation": "positive",

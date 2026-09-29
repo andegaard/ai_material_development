@@ -166,21 +166,41 @@ LEGACY_CONSTRAINT_KEY_MAP = {
 }
 
 
-def extract_manufacturing_constraints(baseline: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+def extract_manufacturing_constraints(
+    baseline: Dict[str, Any], domain_name: Optional[str] = None
+) -> Dict[str, Dict[str, Any]]:
   """Pull element -> {max, unit} constraints out of an Agent 1 baseline file.
 
   Supports both the v2 `manufacturing_constraints` schema (nested under each
   domain) and legacy flat keys like `max_manganese_limit`. Shared by Agent X
   (to extrapolate against) and Agent V (to independently re-check Agent X's
   work) so both always read the same constraints from the same place.
+
+  `domain_name`, when given, restricts this to that one domain's constraints
+  instead of merging every domain in the baseline together. Agent 2/X/V all
+  operate on one human-selected domain at a time; without this, two domains
+  with different limits for the same element would silently overwrite each
+  other (whichever comes later in the list wins) and Agent X could end up
+  checking an extrapolated value against the wrong domain's limit.
   """
   constraints: Dict[str, Dict[str, Any]] = {}
 
-  for domain in baseline.get("domains", []):
+  domains = baseline.get("domains", [])
+  if domain_name is not None:
+    domains = [d for d in domains if d.get("domain_name") == domain_name]
+    if not domains:
+      logger.warning(
+          "No domain named '%s' found in baseline; no manufacturing "
+          "constraints will be applied.", domain_name,
+      )
+
+  for domain in domains:
     for element, limit in domain.get("manufacturing_constraints", {}).items():
       if isinstance(limit, dict) and "max" in limit:
         constraints[element] = {"max": limit["max"], "unit": limit.get("unit", "wt%")}
 
+  # Legacy flat schema has no notion of domains, so it's applied regardless
+  # of domain_name -- it predates the v2 per-domain schema entirely.
   for key, element in LEGACY_CONSTRAINT_KEY_MAP.items():
     if key in baseline and element not in constraints:
       constraints[element] = {"max": baseline[key], "unit": "wt%"}
