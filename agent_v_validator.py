@@ -15,6 +15,14 @@ accident". Scoped to the same domain as Agent X too: Agent X now writes the
 domain it ran for into its own output, so Agent V reads that instead of
 merging every domain's constraints together (which could otherwise silently
 check an extrapolated value against the wrong domain's limit).
+
+Agent X now extrapolates chemical composition, phase composition, and
+heat-treatment variables (see agent_x_simulator.py). Agent 1's manufacturing
+constraints are chemistry-only, so only `variable_category: "chemical"`
+parameters get a real independent re-check against a wt% limit; phase and
+heat-treatment parameters are only checked for being correctly labeled
+`not_applicable` -- there is no constraint of that kind in Agent 1's data to
+re-derive.
 """
 
 import logging
@@ -45,25 +53,43 @@ class AgentVValidator:
     findings = []
     for param in self.simulation.get("extrapolated_parameters", []):
       variable = param.get("base_variable")
+      category = param.get("variable_category", "chemical")  # default for pre-category simulation files
       value = param.get("extrapolated_target_value")
       claimed_status = (param.get("manufacturing_constraint_check") or {}).get("status")
 
-      constraint = self.constraints.get(variable)
-      if constraint is None or value is None:
-        recomputed_status = "no_constraint_found"
+      if category != "chemical":
+        # Agent 1 has no manufacturing constraints for phase or
+        # heat-treatment variables -- there's nothing of that kind to
+        # independently re-derive. The only thing worth checking is that
+        # Agent X labeled it "not_applicable" rather than claiming a wt%
+        # constraint that doesn't exist for this kind of variable.
+        recomputed_status = "not_applicable"
+        disagreement = claimed_status != "not_applicable"
+        needs_review = disagreement
       else:
-        recomputed_status = "exceeds_limit" if value > constraint["max"] else "within_limit"
+        constraint = self.constraints.get(variable)
+        if constraint is None or value is None:
+          recomputed_status = "no_constraint_found"
+        else:
+          recomputed_status = "exceeds_limit" if value > constraint["max"] else "within_limit"
 
-      # Per agent_instructions.md, Agent V halts the pipeline not just when
-      # Agent X's own claim disagrees with the independent re-check, but
-      # whenever the re-check itself finds `exceeds_limit` or
-      # `no_constraint_found` -- even if Agent X already (correctly) flagged
-      # the same thing. Only a recomputed `within_limit` that matches Agent
-      # X's own claim is "confirmed" and needs no review.
-      disagreement = recomputed_status != claimed_status
-      needs_review = disagreement or recomputed_status != "within_limit"
+        # Per agent_instructions.md, Agent V halts the pipeline not just when
+        # Agent X's own claim disagrees with the independent re-check, but
+        # whenever the re-check itself finds `exceeds_limit` or
+        # `no_constraint_found` -- even if Agent X already (correctly)
+        # flagged the same thing. Only a recomputed `within_limit` that
+        # matches Agent X's own claim is "confirmed" and needs no review.
+        disagreement = recomputed_status != claimed_status
+        needs_review = disagreement or recomputed_status != "within_limit"
+
+      # "status" keeps the two-value enum from agent_instructions.md (it's
+      # the halt/no-halt signal Agent 3 checks); for a phase/heat-treatment
+      # variable "confirmed_within_limit" means "no issue found" rather than
+      # literally "within a wt% limit" -- the precise picture is always in
+      # recomputed_status.
       findings.append({
           "variable": variable,
+          "variable_category": category,
           "extrapolated_target_value": value,
           "claimed_status": claimed_status,
           "recomputed_status": recomputed_status,
@@ -71,9 +97,9 @@ class AgentVValidator:
       })
       if disagreement:
         logger.warning(
-            "Disagreement for '%s': Agent X claimed '%s', independent "
+            "Disagreement for '%s' (%s): Agent X claimed '%s', independent "
             "re-check found '%s'.",
-            variable, claimed_status, recomputed_status,
+            variable, category, claimed_status, recomputed_status,
         )
       elif needs_review:
         logger.warning(
@@ -105,4 +131,4 @@ if __name__ == "__main__":
 
   print("\n--- Independent validation result ---")
   for f in result["findings"]:
-    print(f"{f['variable']}: {f['recomputed_status']} -> {f['status']}")
+    print(f"[{f['variable_category']}] {f['variable']}: {f['recomputed_status']} -> {f['status']}")

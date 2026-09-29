@@ -50,8 +50,14 @@ before the first real run, rather than assumed:
   (`common.extract_json_object`). Worth checking whether the API now offers
   a more reliable structured-output mode instead.
 - **`max_tokens` per agent** — set to plausible round numbers, not tuned.
-- **Agent X's CALPHAD integration** — still an explicit `NotImplementedError`
-  stub (`run_calphad_simulation`); output is labeled
-  `heuristic_linear_extrapolation` until a real engine is wired in.
+- **Agent X's simulation engine** — no real thermodynamics yet. Extrapolation
+  is a flat +15% linear rule (`HeuristicLinearEngine`), across chemical
+  composition, phase composition, and heat-treatment findings, labeled
+  `heuristic_linear_extrapolation`. A `SimulationEngine` interface exists so
+  a real engine can be swapped in later without restructuring the pipeline
+  (`CalphadEngine` is the documented, unimplemented stub) — see
+  `agent_x_simulator.py`'s module docstring for what that would need
+  (a Thermo-Calc TC-Python license, or `pycalphad` plus a thermodynamic
+  database for the relevant alloy system).
 - **Setup**: `pip install -r requirements.txt`, then copy `.env.example` to
   `.env` and fill in a real `ANTHROPIC_API_KEY`.

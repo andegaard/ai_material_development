@@ -1,20 +1,39 @@
 """
 Agent X: Thermodynamic Simulator & Extrapolating Designer (v2)
 
-Changes vs. v1:
-- Reads Agent 1's baseline (manufacturing constraints) in addition to Agent 2's
-  research report, and checks every extrapolated value against those
-  constraints instead of extrapolating blind. v1 could (and in the bundled
-  demo, silently did) produce a recipe that violates the company's own
-  manufacturing limits.
-- Handles every positively-correlated variable per finding, not just a single
-  `optimizing_variable` string.
-- Output is explicitly labeled `simulation_mode: "heuristic_linear_extrapolation"`
-  instead of being presented as a validated thermodynamic simulation. A
-  `run_calphad_simulation` hook marks where a real engine (Thermo-Calc
-  TC-Python, or the open-source `pycalphad`) plugs in later.
-- Defensive error handling: malformed/missing keys are logged and skipped
-  rather than raising an uncaught KeyError mid-run.
+IMPORTANT -- what this actually does today: there is no real thermodynamics
+here. `simulation_mode` in the output reflects whichever `SimulationEngine`
+is in use, and the only one implemented (`HeuristicLinearEngine`) does one
+thing: take a positively-correlated variable's literature-tested max and
+push it 15% further (`EXTRAPOLATION_FACTOR`). No Gibbs-energy minimization,
+no phase diagram, no CCT/TTT kinetics. Treat every "hypothesis" below as an
+untested extrapolation, not a validated prediction, until it has gone
+through an actual CALPHAD engine or physical lab testing.
+
+Engine seam, so swapping in real thermodynamics later doesn't require
+restructuring the pipeline: `SimulationEngine` is the interface; pass a
+different implementation via `AgentXSimulator(..., engine=SomeEngine())` and
+everything else -- constraint checking, output shape, Agent V's independent
+check -- keeps working unchanged. `CalphadEngine` below is the documented,
+unimplemented stub for when a Thermo-Calc TC-Python license or a pycalphad
++ thermodynamic-database setup becomes available.
+
+Handles three kinds of extrapolation target per finding, not just chemistry:
+chemical composition, phase composition, and heat-treatment parameters (see
+agent_2_frontier_research.py's finding schema). Agent 1's manufacturing
+constraints are chemistry-only, so only chemical-category variables get a
+real `within_limit`/`exceeds_limit` check; phase and heat-treatment
+variables are reported with status `not_applicable` since there is no
+constraint of that kind to check against -- this is a real "nothing to
+check", not the same thing as `no_constraint_found` (a chemical element
+Agent 1 simply didn't report a limit for).
+
+Reads Agent 1's baseline (manufacturing constraints) in addition to Agent
+2's research report, and checks every chemical extrapolation against those
+constraints instead of extrapolating blind -- scoped to the one domain
+Agent 2 was scoped to (see common.extract_manufacturing_constraints).
+Malformed/missing keys are logged and skipped rather than raising an
+uncaught KeyError mid-run.
 """
 
 import json
@@ -29,16 +48,93 @@ logger = logging.getLogger("agent_x")
 
 EXTRAPOLATION_FACTOR = 1.15  # +15% beyond literature max; see module docstring
 
+# Where to look for a named `optimizing_variable` on a finding, in order,
+# and what category to tag it with once found.
+RANGE_FIELDS = [
+    ("chemical_composition_range", "chemical"),
+    ("phase_composition_range", "phase"),
+    ("heat_treatment_range", "heat_treatment"),
+]
+
+
+class SimulationEngine:
+  """Interface an Agent X extrapolation backend must implement.
+
+  `HeuristicLinearEngine` below is the only implementation today. A future
+  real engine (`CalphadEngine`, or a Thermo-Calc TC-Python-backed one)
+  implements the same interface and is swapped in via
+  `AgentXSimulator(engine=...)` -- nothing else in the pipeline changes.
+  """
+
+  MODE_LABEL = "unknown"
+
+  def extrapolate(
+      self, finding: Dict[str, Any], variable: str, category: str, literature_range: Dict[str, Any]
+  ) -> Optional[Dict[str, Any]]:
+    """Given one (variable, category, literature_range) drawn from a single
+    positively-correlated finding, return
+    {"literature_tested_max": ..., "extrapolated_target_value": ...}, or
+    None if this engine can't extrapolate this input (logged and skipped by
+    the caller, never raised)."""
+    raise NotImplementedError
+
+
+class HeuristicLinearEngine(SimulationEngine):
+  """+15% linear extrapolation beyond the literature-tested max, per
+  variable. Not a validated thermodynamic simulation -- see module
+  docstring. Phase fractions are additionally clamped at 100%, since unlike
+  a chemical composition or a temperature, a phase fraction has a hard
+  physical ceiling that a flat percentage bump can otherwise exceed.
+  """
+
+  MODE_LABEL = "heuristic_linear_extrapolation"
+
+  def extrapolate(self, finding, variable, category, literature_range):
+    tested_max = literature_range.get("max")
+    if tested_max is None:
+      return None
+
+    extrapolated_value = round(tested_max * EXTRAPOLATION_FACTOR, 3)
+    if category == "phase":
+      extrapolated_value = min(extrapolated_value, 100.0)
+
+    return {"literature_tested_max": tested_max, "extrapolated_target_value": extrapolated_value}
+
+
+class CalphadEngine(SimulationEngine):
+  """Placeholder for a real thermodynamic engine -- Thermo-Calc TC-Python
+  (commercial, needs an existing license) or `pycalphad` (open source, but
+  needs a thermodynamic database (TDB) for the relevant alloy system, which
+  is not included here and may need to be sourced or built).
+
+  To wire this in: implement `extrapolate` to run an actual equilibrium (or
+  kinetic) calculation for the given composition/phase/heat-treatment
+  variable instead of linear extrapolation, and pass
+  `AgentXSimulator(..., engine=CalphadEngine(...))`. Everything else --
+  constraint checking against Agent 1's baseline, Agent V's independent
+  check, Agent 3's roadmap generation -- keeps working unchanged, since they
+  all consume this engine's output shape, not its internals.
+
+  Left unimplemented on purpose: shipping fabricated phase-fraction numbers
+  as if they came from a real simulation is worse than clearly labeling the
+  current heuristic mode as unvalidated.
+  """
+
+  MODE_LABEL = "calphad"
+
+  def extrapolate(self, finding, variable, category, literature_range):
+    raise NotImplementedError(
+        "No CALPHAD engine wired in yet. Implement this against pycalphad "
+        "or Thermo-Calc TC-Python, then pass "
+        "AgentXSimulator(engine=CalphadEngine(...)) to use it."
+    )
+
 
 class AgentXSimulator:
-  """Extrapolates candidate alloy recipes from Agent 2's research findings.
-
-  IMPORTANT: `simulation_mode` in the output is always
-  "heuristic_linear_extrapolation" unless `run_calphad_simulation` has been
-  implemented and wired in below. This class does not perform real
-  thermodynamic simulation on its own -- treat its "hypothesis" values as
-  untested extrapolations, not validated predictions, until they have gone
-  through an actual CALPHAD engine or physical lab testing.
+  """Extrapolates candidate alloy recipes from Agent 2's research findings,
+  using whichever `SimulationEngine` is configured (default: the heuristic
+  linear one). See module docstring for what "simulation" does and doesn't
+  mean here.
   """
 
   def __init__(
@@ -46,7 +142,9 @@ class AgentXSimulator:
       agent_2_report_path: str,
       agent_1_baseline_path: Optional[str] = None,
       domain_name: Optional[str] = None,
+      engine: Optional[SimulationEngine] = None,
   ):
+    self.engine = engine or HeuristicLinearEngine()
     self.extrapolated_plans: List[Dict[str, Any]] = []
 
     self.research_data = load_json_validated(
@@ -73,8 +171,8 @@ class AgentXSimulator:
       )
     else:
       logger.warning(
-          "No Agent 1 baseline provided -- extrapolated values will NOT be "
-          "checked against real manufacturing constraints. Every "
+          "No Agent 1 baseline provided -- extrapolated chemical values will "
+          "NOT be checked against real manufacturing constraints. Every "
           "constraint check below will report 'no_constraint_found'."
       )
 
@@ -91,47 +189,61 @@ class AgentXSimulator:
         continue
 
       mechanism = finding.get("mechanism", "unknown mechanism")
-      composition_range = finding.get("chemical_composition_range") or {}
+      resolved_variables = self._variables_for_finding(finding)
 
-      # v1 only extrapolated the single `optimizing_variable`. A finding may
-      # legitimately report several co-varying elements; extrapolate every
-      # one that the finding actually names and has a `max` for.
-      variables_to_extrapolate = self._variables_for_finding(
-          finding, composition_range
-      )
-
-      if not variables_to_extrapolate:
+      if not resolved_variables:
         logger.warning(
-            "Skipping finding '%s': no usable composition data for its "
-            "optimizing_variable(s).", mechanism,
+            "Skipping finding '%s': no usable variable data across "
+            "chemical/phase/heat-treatment ranges.", mechanism,
         )
         continue
 
-      for variable in variables_to_extrapolate:
-        range_for_variable = composition_range.get(variable)
-        if not range_for_variable or "max" not in range_for_variable:
+      for resolved in resolved_variables:
+        variable, category, range_for_variable = (
+            resolved["variable"], resolved["category"], resolved["range"],
+        )
+
+        if "max" not in range_for_variable:
           logger.warning(
-              "Skipping variable '%s' in finding '%s': no 'max' reported.",
-              variable, mechanism,
+              "Skipping %s variable '%s' in finding '%s': no 'max' reported.",
+              category, variable, mechanism,
           )
           continue
 
-        tested_max = range_for_variable["max"]
-        extrapolated_value = round(tested_max * EXTRAPOLATION_FACTOR, 3)
-        constraint_check = self._check_constraint(variable, extrapolated_value)
+        extrapolation = self.engine.extrapolate(finding, variable, category, range_for_variable)
+        if extrapolation is None:
+          logger.warning(
+              "Engine could not extrapolate %s variable '%s' in finding '%s'.",
+              category, variable, mechanism,
+          )
+          continue
+
+        extrapolated_value = extrapolation["extrapolated_target_value"]
+        tested_max = extrapolation["literature_tested_max"]
+
+        # Agent 1's manufacturing constraints are chemistry-only (element wt%
+        # limits) -- phase and heat-treatment variables have no such ceiling
+        # to check against at all, which is a real "not applicable", not the
+        # same thing as a chemical element Agent 1 simply didn't report a
+        # limit for ("no_constraint_found").
+        if category == "chemical":
+          constraint_check = self._check_constraint(variable, extrapolated_value)
+        else:
+          constraint_check = {"limit": None, "unit": None, "status": "not_applicable"}
 
         extrapolated_experiments.append({
             "target_mechanism": mechanism,
             "base_variable": variable,
+            "variable_category": category,
             "literature_tested_max": tested_max,
             "extrapolated_target_value": extrapolated_value,
             "manufacturing_constraint_check": constraint_check,
             "hypothesis": (
-                f"Extrapolating {variable} to {extrapolated_value} (above "
-                f"literature max of {tested_max}) is hypothesized to "
-                "increase the desired phase fraction. UNVALIDATED: derived "
-                "from a linear extrapolation, not a thermodynamic "
-                "simulation."
+                f"Extrapolating {category} variable '{variable}' to "
+                f"{extrapolated_value} (above literature max of {tested_max}) "
+                "is hypothesized to improve the domain's performance "
+                f"priorities. UNVALIDATED: derived from {self.engine.MODE_LABEL}, "
+                "not a thermodynamic simulation."
             ),
         })
 
@@ -147,16 +259,30 @@ class AgentXSimulator:
     return extrapolated_experiments
 
   @staticmethod
-  def _variables_for_finding(
-      finding: Dict[str, Any], composition_range: Dict[str, Any]
-  ) -> List[str]:
-    """`optimizing_variable` may be a single string (v1-style) or a list of
-    strings (for findings that report several co-varying elements)."""
+  def _variables_for_finding(finding: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """`optimizing_variable` may be a single string or a list of strings.
+    Resolve each name against whichever of the finding's range fields
+    (chemical/phase/heat-treatment) actually defines it, so Agent X isn't
+    limited to chemistry."""
     raw = finding.get("optimizing_variable")
     if raw is None:
       return []
-    variables = raw if isinstance(raw, list) else [raw]
-    return [v for v in variables if v in composition_range]
+    names = raw if isinstance(raw, list) else [raw]
+
+    resolved = []
+    for name in names:
+      for field, category in RANGE_FIELDS:
+        range_dict = finding.get(field) or {}
+        if name in range_dict:
+          resolved.append({"variable": name, "category": category, "range": range_dict[name]})
+          break
+      else:
+        logger.warning(
+            "Skipping variable '%s' in finding '%s': not found in any range "
+            "field (chemical/phase/heat_treatment).",
+            name, finding.get("mechanism", "unknown mechanism"),
+        )
+    return resolved
 
   def _check_constraint(
       self, variable: str, extrapolated_value: float
@@ -176,25 +302,6 @@ class AgentXSimulator:
         "status": status,
     }
 
-  # --------------------------------------------------------------- CALPHAD
-
-  def run_calphad_simulation(self, *args, **kwargs):
-    """Integration point for a real thermodynamic engine.
-
-    Wire in Thermo-Calc's TC-Python API or the open-source `pycalphad`
-    package here, and have `generate_simulation_output` call this instead of
-    the placeholder phase-fraction/cooling-rate values below, once available.
-
-    Left unimplemented on purpose: shipping fabricated phase-fraction
-    numbers as if they came from a real simulation is worse than clearly
-    labeling the current heuristic mode as unvalidated.
-    """
-    raise NotImplementedError(
-        "No CALPHAD engine wired in yet. Keep simulation_mode set to "
-        "'heuristic_linear_extrapolation' and do not report phase "
-        "fractions as simulated results until this is implemented."
-    )
-
   # ---------------------------------------------------------------- output
 
   def generate_simulation_output(self, output_path: str) -> Dict[str, Any]:
@@ -207,20 +314,21 @@ class AgentXSimulator:
     simulation_output = {
         "virtual_prototype": "Prototype_Extrapolated_X1",
         "domain": self.domain_name,
-        "simulation_mode": "heuristic_linear_extrapolation",
+        "simulation_mode": self.engine.MODE_LABEL,
         "extrapolated_parameters": self.extrapolated_plans,
-        # Placeholder values -- NOT derived from a real simulation. Do not
-        # treat these as validated until run_calphad_simulation is
-        # implemented and actually called above.
+        # Placeholder values -- NOT derived from a real simulation. Stay None
+        # until a real engine (see CalphadEngine) actually computes them.
         "simulated_phase_fraction": {
             "retained_austenite": None,
             "bainite": None,
         },
         "required_cooling_rate_c_s": None,
         "confidence_note": (
-            "Extrapolated via a flat +15% linear rule per variable, with no "
-            "physics-based phase or cooling-rate modeling. Treat as a "
-            "hypothesis list for lab validation, not a simulation result."
+            f"Extrapolated via {self.engine.MODE_LABEL} "
+            f"({EXTRAPOLATION_FACTOR}x factor per variable, across chemical "
+            "composition, phase composition, and heat-treatment findings), "
+            "with no physics-based phase or cooling-rate modeling. Treat as "
+            "a hypothesis list for lab validation, not a simulation result."
         ),
         "requires_human_review": any_exceeds_limit,
     }
@@ -241,9 +349,11 @@ class AgentXSimulator:
 
 
 if __name__ == "__main__":
-  # Demo reproducing the Mn scenario from the architecture review: Agent 1's
-  # baseline caps Mn at 1.6 wt%, but the literature-extrapolated value
-  # (1.8 * 1.15 = 2.07) exceeds it. v1 shipped this silently; v2 flags it.
+  # Demo covering all three variable categories: a chemical element that
+  # exceeds Agent 1's Mn ceiling (the original architecture-review scenario:
+  # 1.8 * 1.15 = 2.07 > 1.6), a phase fraction (no manufacturing constraint
+  # of that kind exists, so it's "not_applicable"), and a heat-treatment
+  # parameter (same).
   os.makedirs("temp_data", exist_ok=True)
 
   mock_agent_1_baseline = {
@@ -264,10 +374,16 @@ if __name__ == "__main__":
       "breakthrough_findings": [{
           "mechanism": "Retained austenite stabilization via Si/Mn partitioning",
           "performance_correlation": "positive",
-          "optimizing_variable": "Mn",
+          "optimizing_variable": ["Mn", "retained_austenite", "tempering_temp_c"],
           "chemical_composition_range": {
               "C": {"min": 0.15, "max": 0.25},
               "Mn": {"min": 1.2, "max": 1.8},
+          },
+          "phase_composition_range": {
+              "retained_austenite": {"min": 8, "max": 92},
+          },
+          "heat_treatment_range": {
+              "tempering_temp_c": {"min": 150, "max": 250, "unit": "C"},
           },
       }]
   }
@@ -286,6 +402,7 @@ if __name__ == "__main__":
   print("\n--- Constraint check result ---")
   for p in result["extrapolated_parameters"]:
     print(
-        f"{p['base_variable']}: {p['extrapolated_target_value']} -> "
+        f"[{p['variable_category']}] {p['base_variable']}: "
+        f"{p['extrapolated_target_value']} -> "
         f"{p['manufacturing_constraint_check']['status']}"
     )
