@@ -16,7 +16,12 @@ Two-phase design, mirroring Agent 1's per-grade pattern:
     - `research_topics`: a broad, non-redundant list of distinct mechanisms
       / alloying strategies / processing routes worth investigating, derived
       from the real alloy systems Agent 1 already found for this domain
-      rather than guessed cold.
+      rather than guessed cold. If Agent 1 flagged the domain as including
+      powder-metallurgy (PM) grades (`includes_powder_metallurgy` /
+      `is_powder_metallurgy` -- see agent_1_market_intelligence.py), that's
+      treated as a key factor here: PM removes conventional ingot/wrought
+      alloying limits, so both the priorities and the topics should reflect
+      compositions/microstructures that wouldn't be realistic otherwise.
 
   Phase B (`_research_topic`) runs one dedicated, `web_search`-heavy call
   per topic (capped at `MAX_RESEARCH_TOPICS_PER_DOMAIN`), each told to keep
@@ -90,6 +95,18 @@ this schema, with no other commentary:
    to improve on those priorities beyond the current grades. Draw on the
    real alloy systems already present in the current grades' chemistry
    rather than generic topics unrelated to what this company actually makes.
+
+If the domain data shows `includes_powder_metallurgy: true` (at the domain
+level) or any grade has `is_powder_metallurgy: true`, treat that as a key
+factor, not an incidental detail: powder metallurgy removes the
+segregation/solidification limits that cap what conventional ingot/wrought
+alloying can achieve, and enables consolidation routes (sintering, HIP),
+compositions, and controlled microstructures/porosity that wouldn't
+otherwise be realistic. In that case, your research_topics should include
+PM-specific directions (e.g. powder chemistry/atomization, consolidation
+parameters, achievable density) where relevant, and your
+performance_priorities/mechanisms should not be limited to what's achievable
+via conventional ingot metallurgy alone.
 """
 
 TOPIC_SYSTEM_PROMPT = """You are an academic metallurgist doing an

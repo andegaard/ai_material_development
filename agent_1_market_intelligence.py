@@ -28,6 +28,19 @@ written out, so every material has the *same* set of fields even when a
 field's value is unavailable (`null` / `[]`) for that particular grade --
 this is what keeps downstream agents from having to special-case missing
 keys per material.
+
+Powder metallurgy (PM) is deliberately surfaced as its own deterministic
+flag rather than left buried inside `manufacturing_methods` free text: PM
+removes the segregation/solidification limits that cap conventional
+ingot/wrought alloying and enables compositions and microstructures that
+wouldn't otherwise be achievable, which matters directly to Agent 2's
+research framing (see agent_2_frontier_research.py). `is_powder_metallurgy`
+(per grade) and `includes_powder_metallurgy` (per domain) are computed in
+code from `manufacturing_methods` after normalization -- not asked of the
+model directly -- precisely so the flag can't go missing or drift out of
+sync with what manufacturing_methods actually says. Both are tri-state
+(`True` / `False` / `None`) since "no manufacturing-method data was found"
+is a different situation from "we found data and it's not PM".
 """
 
 import logging
@@ -89,6 +102,25 @@ GRADE_TEMPLATE: Dict[str, Any] = {
     "notes": None,
     "sources": [],
 }
+# Not in GRADE_TEMPLATE on purpose: is_powder_metallurgy is derived from
+# manufacturing_methods in code (see _derive_is_pm), not merged in from the
+# model's own JSON like every other field above.
+
+
+def _is_pm_method(method: str) -> bool:
+  """Matches 'powder metallurgy', 'PM', 'P/M', case-insensitively --
+  whatever phrasing the model used for this manufacturing_methods entry."""
+  normalized = method.strip().lower()
+  return "powder" in normalized or normalized in ("pm", "p/m")
+
+
+def _derive_is_pm(manufacturing_methods: List[str]) -> Optional[bool]:
+  """True/False if we have manufacturing-method data to judge from, None if
+  we don't -- collapsing "no data" into False would make an unresearched
+  grade look like a confirmed non-PM grade."""
+  if not manufacturing_methods:
+    return None
+  return any(_is_pm_method(m) for m in manufacturing_methods)
 
 DISCOVERY_SYSTEM_PROMPT = """You are a precise market intelligence analyst for
 industrial steel manufacturers. Work with low creativity and high factual
@@ -211,6 +243,19 @@ class Agent1MarketIntelligence:
       grade_names = grade_names[: self.max_grades_per_domain]
       domain["grades"] = [self._research_grade(company, name) for name in grade_names]
 
+      # Tri-state aggregate so Agent 2 can key off one domain-level field
+      # instead of scanning every grade itself: True if any grade is
+      # confirmed PM, None if the rest is simply unresearched (not a
+      # confirmed "no"), False only if every grade was researched and none
+      # of them are PM.
+      pm_flags = [g.get("is_powder_metallurgy") for g in domain["grades"]]
+      if any(f is True for f in pm_flags):
+        domain["includes_powder_metallurgy"] = True
+      elif any(f is None for f in pm_flags):
+        domain["includes_powder_metallurgy"] = None
+      else:
+        domain["includes_powder_metallurgy"] = False
+
     save_json_validated(baseline, output_path, required_keys=REQUIRED_OUTPUT_KEYS)
     total_grades = sum(len(d.get("grades", [])) for d in baseline.get("domains", []))
     logger.info(
@@ -271,7 +316,9 @@ class Agent1MarketIntelligence:
       data = {}
 
     data["grade_name"] = grade_name  # keep the discovered name as the join key
-    return _with_defaults(data, GRADE_TEMPLATE)
+    grade = _with_defaults(data, GRADE_TEMPLATE)
+    grade["is_powder_metallurgy"] = _derive_is_pm(grade["manufacturing_methods"])
+    return grade
 
 
 if __name__ == "__main__":
