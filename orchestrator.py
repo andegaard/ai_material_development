@@ -7,7 +7,11 @@ checkpoints and the halt-on-contradiction behavior after Agent V:
 
 Agent 1 -> [Checkpoint 1: pick domain] -> Agent 2 -> Agent X -> Agent V ->
 [halt + review if contradiction_found] -> Agent 3 ->
-[Checkpoint 2: approve roadmap] -> Agent 4
+[Checkpoint 2: approve roadmap] -> Agent 4 -> consolidated PDF report
+
+A consolidated PDF report (see report_builder.py) is built at the end of a
+full run, and also on any halt -- whatever stages completed are rendered
+normally, anything that didn't run yet is labeled as such.
 """
 
 import logging
@@ -20,6 +24,7 @@ from agent_4_ip_lca_audit import Agent4IPAndLCAAudit
 from agent_v_validator import AgentVValidator
 from agent_x_simulator import AgentXSimulator
 from common import PipelineHalt
+from report_builder import build_report
 
 logging.basicConfig(level=logging.INFO, format="[Orchestrator] %(message)s")
 logger = logging.getLogger("orchestrator")
@@ -110,7 +115,8 @@ def run_pipeline(company: str, company_url: str) -> None:
       json_output_path=_path("agent_4_audit.json"),
   )
 
-  logger.info("=== PIPELINE COMPLETE. See '%s/' for all reports. ===", DATA_DIR)
+  report_path = build_report(data_dir=DATA_DIR, output_path=_path("pipeline_report.pdf"))
+  logger.info("=== PIPELINE COMPLETE. See '%s/' for all reports, including '%s'. ===", DATA_DIR, report_path)
 
 
 if __name__ == "__main__":
@@ -118,4 +124,8 @@ if __name__ == "__main__":
     run_pipeline(company="SSAB", company_url="https://www.ssab.com")
   except PipelineHalt as exc:
     logger.error("Pipeline halted: %s", exc)
+    # Still worth a report -- whatever stages did complete are rendered
+    # normally, and anything that didn't run yet is labeled as such rather
+    # than silently missing.
+    build_report(data_dir=DATA_DIR, output_path=os.path.join(DATA_DIR, "pipeline_report.pdf"))
     raise SystemExit(1)

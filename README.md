@@ -57,31 +57,47 @@ All six agents plus the orchestrator are scaffolded against the v2 spec in
   thermodynamics later (pycalphad, or Thermo-Calc TC-Python if a license is
   available) is a matter of implementing that one class and passing
   `AgentXSimulator(engine=CalphadEngine(...))`; nothing else in the
-  pipeline needs to change.
+  pipeline needs to change. (Explored actually wiring pycalphad in; decided
+  to hold off until it's clear whether a Thermo-Calc license is obtainable,
+  since TC-Python's database coverage for multicomponent steel is far
+  broader than any free option.)
+- **Powder metallurgy (PM) surfaced as a key signal**: `is_powder_metallurgy`
+  (per grade) and `includes_powder_metallurgy` (per domain) are derived in
+  code from `manufacturing_methods`, tri-state (`True`/`False`/`None` for
+  "not yet researched"). Agent 2's planning prompt treats this as a key
+  factor — PM removes conventional ingot/wrought alloying limits, so
+  research topics and priorities should reflect that.
+- **Agent V, 3, 4 walked through in detail** (role, input, output) — see
+  conversation history; no code changes needed, they already matched intent.
+- **Consolidated PDF report** (`report_builder.py`): reads whatever stage
+  output files exist and renders one PDF with a section per
+  Agent-1&2/Agent-X&V/Agent-3/Agent-4. Tolerant of a partial run — a stage
+  that hasn't produced output yet is labeled "not yet run" rather than
+  crashing the report. Wired into `orchestrator.py`: builds automatically
+  at the end of a full run, and also on any `PipelineHalt` so a rejected/
+  halted run still produces a report of whatever did complete.
 
 **Explicitly not done / honest limitations:**
 - No real thermodynamic computation anywhere. `heuristic_linear_extrapolation`
   is a flat percentage rule, not physics. `simulated_phase_fraction` and
   `required_cooling_rate_c_s` in Agent X's output are still `null`.
 - Nothing has been run against the live Anthropic API yet — Agents 1, 2, 3,
-  4 are untested beyond code review and compile checks (Agent X and Agent V
-  don't need the API and have been exercised with mock data).
-- Agent 3 and Agent 4 have not been revisited since their initial scaffold —
-  worth a pass to check they handle the richer Agent 1/2/X data well (e.g.
-  Agent 3's prompt could mention that extrapolated parameters may be
-  phase/heat-treatment variables, not just chemistry).
+  4 are untested beyond code review and compile checks (Agent X, Agent V,
+  and `report_builder.py` don't need the API and have been exercised with
+  mock data).
 - See "Before running" below for the API-integration specifics (tool-type
   strings, model IDs, structured outputs) still needing verification.
 
 ### Next steps (pick up here)
 
-1. Review Agent V's own file in detail (`agent_v_validator.py`) — not yet
-   walked through line by line the way Agents 1/2/X were.
-2. Review Agent 3 (`agent_3_gap_analysis.py`) and Agent 4
-   (`agent_4_ip_lca_audit.py`) the same way — inputs, prompts, outputs.
-3. Review `orchestrator.py` end to end once all agents are settled.
-4. Resolve the "Before running" items, then do a real end-to-end run with a
+1. Review `orchestrator.py` end to end now that all agents + the report
+   builder are wired together.
+2. Resolve the "Before running" items, then do a real end-to-end run with a
    live `ANTHROPIC_API_KEY` against a real company/domain.
+3. Once a real run exists, sanity-check `report_builder.py`'s output against
+   actual (not mock) data — table column choices and the markdown-lite
+   renderer were only exercised against hand-written stand-ins for Agent
+   3/4's prose.
 
 ## Layout
 
@@ -95,6 +111,7 @@ All six agents plus the orchestrator are scaffolded against the v2 spec in
 - `agent_v_validator.py` — Agent V (independent constraint re-check, pure code).
 - `agent_3_gap_analysis.py` — Agent 3 (TRIZ gap analysis + roadmap).
 - `agent_4_ip_lca_audit.py` — Agent 4 (FTO screen + LCA estimate).
+- `report_builder.py` — consolidates all stage outputs into one PDF report.
 - `orchestrator.py` — runs the full pipeline with both human checkpoints.
 - `archive/v1_prototype/` — earlier prototype (v1), kept for reference. Uses
   retired model IDs and deprecated temperature parameters; superseded by the
