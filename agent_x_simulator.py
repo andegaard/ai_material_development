@@ -18,15 +18,23 @@ check -- keeps working unchanged. `CalphadEngine` below is the documented,
 unimplemented stub for when a Thermo-Calc TC-Python license or a pycalphad
 + thermodynamic-database setup becomes available.
 
-Handles three kinds of extrapolation target per finding, not just chemistry:
-chemical composition, phase composition, and heat-treatment parameters (see
-agent_2_frontier_research.py's finding schema). Agent 1's manufacturing
-constraints are chemistry-only, so only chemical-category variables get a
-real `within_limit`/`exceeds_limit` check; phase and heat-treatment
-variables are reported with status `not_applicable` since there is no
-constraint of that kind to check against -- this is a real "nothing to
-check", not the same thing as `no_constraint_found` (a chemical element
-Agent 1 simply didn't report a limit for).
+Handles four kinds of extrapolation target per finding, not just chemistry:
+chemical composition, phase composition, heat-treatment parameters, and
+mechanical properties themselves when that's what the literature reports a
+range for (see agent_2_frontier_research.py's finding schema). Agent 1's
+manufacturing constraints are chemistry-only, so only chemical-category
+variables get a real `within_limit`/`exceeds_limit` check; everything else
+is reported with status `not_applicable` since there is no constraint of
+that kind to check against -- this is a real "nothing to check", not the
+same thing as `no_constraint_found` (a chemical element Agent 1 simply
+didn't report a limit for).
+
+A finding's `reported_mechanical_properties` (a single value reported at the
+literature-tested condition, not a range) is never extrapolated -- there's
+no physics model here connecting composition to mechanical outcome -- but it
+is carried through onto every extrapolated_parameters entry from that
+finding as `literature_reported_properties`, so the actual measured context
+behind a hypothesis stays visible instead of being silently dropped.
 
 Reads Agent 1's baseline (manufacturing constraints) in addition to Agent
 2's research report, and checks every chemical extrapolation against those
@@ -54,6 +62,7 @@ RANGE_FIELDS = [
     ("chemical_composition_range", "chemical"),
     ("phase_composition_range", "phase"),
     ("heat_treatment_range", "heat_treatment"),
+    ("mechanical_property_range", "mechanical_property"),
 ]
 
 
@@ -194,7 +203,7 @@ class AgentXSimulator:
       if not resolved_variables:
         logger.warning(
             "Skipping finding '%s': no usable variable data across "
-            "chemical/phase/heat-treatment ranges.", mechanism,
+            "chemical/phase/heat-treatment/mechanical-property ranges.", mechanism,
         )
         continue
 
@@ -238,6 +247,8 @@ class AgentXSimulator:
             "literature_tested_max": tested_max,
             "extrapolated_target_value": extrapolated_value,
             "manufacturing_constraint_check": constraint_check,
+            # Grounding context, not extrapolated -- see module docstring.
+            "literature_reported_properties": finding.get("reported_mechanical_properties") or {},
             "hypothesis": (
                 f"Extrapolating {category} variable '{variable}' to "
                 f"{extrapolated_value} (above literature max of {tested_max}) "
@@ -279,7 +290,7 @@ class AgentXSimulator:
       else:
         logger.warning(
             "Skipping variable '%s' in finding '%s': not found in any range "
-            "field (chemical/phase/heat_treatment).",
+            "field (chemical/phase/heat_treatment/mechanical_property).",
             name, finding.get("mechanism", "unknown mechanism"),
         )
     return resolved
@@ -326,9 +337,10 @@ class AgentXSimulator:
         "confidence_note": (
             f"Extrapolated via {self.engine.MODE_LABEL} "
             f"({EXTRAPOLATION_FACTOR}x factor per variable, across chemical "
-            "composition, phase composition, and heat-treatment findings), "
-            "with no physics-based phase or cooling-rate modeling. Treat as "
-            "a hypothesis list for lab validation, not a simulation result."
+            "composition, phase composition, heat-treatment, and mechanical-"
+            "property findings), with no physics-based phase or "
+            "cooling-rate modeling. Treat as a hypothesis list for lab "
+            "validation, not a simulation result."
         ),
         "requires_human_review": any_exceeds_limit,
     }
@@ -349,11 +361,14 @@ class AgentXSimulator:
 
 
 if __name__ == "__main__":
-  # Demo covering all three variable categories: a chemical element that
+  # Demo covering all four variable categories: a chemical element that
   # exceeds Agent 1's Mn ceiling (the original architecture-review scenario:
-  # 1.8 * 1.15 = 2.07 > 1.6), a phase fraction (no manufacturing constraint
-  # of that kind exists, so it's "not_applicable"), and a heat-treatment
-  # parameter (same).
+  # 1.8 * 1.15 = 2.07 > 1.6), a phase fraction and a heat-treatment
+  # parameter (no manufacturing constraint of that kind exists for either,
+  # so both are "not_applicable"), and a mechanical property reported as a
+  # range (hardness varied across trials) -- plus a *separate*
+  # reported_mechanical_properties single data point, to show it's carried
+  # through as context rather than extrapolated.
   os.makedirs("temp_data", exist_ok=True)
 
   mock_agent_1_baseline = {
@@ -374,7 +389,7 @@ if __name__ == "__main__":
       "breakthrough_findings": [{
           "mechanism": "Retained austenite stabilization via Si/Mn partitioning",
           "performance_correlation": "positive",
-          "optimizing_variable": ["Mn", "retained_austenite", "tempering_temp_c"],
+          "optimizing_variable": ["Mn", "retained_austenite", "tempering_temp_c", "hardness_hbw"],
           "chemical_composition_range": {
               "C": {"min": 0.15, "max": 0.25},
               "Mn": {"min": 1.2, "max": 1.8},
@@ -384,6 +399,12 @@ if __name__ == "__main__":
           },
           "heat_treatment_range": {
               "tempering_temp_c": {"min": 150, "max": 250, "unit": "C"},
+          },
+          "mechanical_property_range": {
+              "hardness_hbw": {"min": 380, "max": 420, "unit": "HBW"},
+          },
+          "reported_mechanical_properties": {
+              "impact_toughness_j": {"value": 45, "unit": "J"},
           },
       }]
   }
@@ -404,5 +425,6 @@ if __name__ == "__main__":
     print(
         f"[{p['variable_category']}] {p['base_variable']}: "
         f"{p['extrapolated_target_value']} -> "
-        f"{p['manufacturing_constraint_check']['status']}"
+        f"{p['manufacturing_constraint_check']['status']} "
+        f"(literature context: {p['literature_reported_properties']})"
     )

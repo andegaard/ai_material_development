@@ -37,9 +37,14 @@ traceability) and must carry at least one source -- unsourced findings are
 dropped before Agent X ever sees them, per agent_instructions.md section 2.
 
 Each finding may report a chemical_composition_range, a
-phase_composition_range, and/or a heat_treatment_range -- Agent X extrapolates
-across whichever of the three actually apply to a given finding, not just
-chemistry.
+phase_composition_range, a heat_treatment_range, and/or a
+mechanical_property_range -- Agent X extrapolates across whichever of these
+actually apply to a given finding, not just chemistry. Mechanical properties
+aren't a fixed list decided in advance here either: report whatever
+properties the literature actually gives you, under whatever name fits.
+Separately, a finding's reported_mechanical_properties (a single reported
+value at the tested condition, not a range) is carried through to Agent X
+as grounding context rather than something to extrapolate.
 """
 
 import json
@@ -125,15 +130,25 @@ this schema, with no other commentary:
     {
       "mechanism": "string",
       "performance_correlation": "positive | negative | neutral",
-      "optimizing_variable": "string, or [string, ...] -- may name a chemical element, a microstructural phase, or a heat-treatment parameter",
+      "optimizing_variable": "string, or [string, ...] -- may name a chemical element, a microstructural phase, a heat-treatment parameter, OR a mechanical property itself when that's what the literature reports a range/trend for",
       "chemical_composition_range": {"<element>": {"min": <number>, "max": <number>}},
       "phase_composition_range": {"<phase_name>": {"min": <percent>, "max": <percent>}},
       "heat_treatment_range": {"<parameter_name, e.g. tempering_temp_c or cooling_rate_c_s>": {"min": <number>, "max": <number>, "unit": "string"}},
-      "reported_mechanical_properties": {"...": "..."},
+      "mechanical_property_range": {"<property_name, whatever you actually found>": {"min": <number>, "max": <number>, "unit": "string"}},
+      "reported_mechanical_properties": {"<property_name>": {"value": <number>, "unit": "string"}},
       "sources": [{"title": "string", "url": "string"}]
     }
   ]
 }
+
+"mechanical_property_range" vs. "reported_mechanical_properties" are
+different things: use "mechanical_property_range" when the mechanism's
+own trend IS a mechanical property varying across trials (e.g. hardness
+ranged 380-420 HBW across the compositions tested) -- this makes that
+property itself an optimizable target. Use "reported_mechanical_properties"
+for a single reported data point at the tested condition (e.g. "at this
+composition, yield strength was X") -- this is grounding context, not a
+range to push beyond.
 
 Judge "performance_correlation" against the performance priorities you are
 given, not a generic notion of "better". Report as many distinct findings as
@@ -141,9 +156,10 @@ you can actually source -- do not pad with duplicates or invent findings you
 cannot cite. Omit any finding you cannot cite at least one source for.
 
 Include whichever of "chemical_composition_range", "phase_composition_range",
-and "heat_treatment_range" are actually relevant and sourced for a given
-finding -- you do not need to fill all three for every finding, and should
-leave a range object out entirely if you have no sourced data for it.
+"heat_treatment_range", and "mechanical_property_range" are actually
+relevant and sourced for a given finding -- you do not need to fill all four
+for every finding, and should leave a range object out entirely if you have
+no sourced data for it.
 """
 
 

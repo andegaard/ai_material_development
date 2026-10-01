@@ -66,22 +66,19 @@ MAX_GRADES_PER_DOMAIN = 15  # bounds cost/runtime for large catalogs; raise if n
 REQUIRED_OUTPUT_KEYS = ["company", "domains", "sources"]
 
 # Every grade record is normalized to have exactly these keys. Nested dicts
-# with fixed sub-fields (mechanical_properties, heat_treatment,
-# eco_fingerprint) are normalized recursively; `chemical_composition` and
-# `phase_composition` are open-ended (keyed by element/phase name, which
-# legitimately differs per alloy) and are left as whatever the model found,
-# defaulting to {} rather than a fixed key set.
+# with fixed sub-fields (heat_treatment, eco_fingerprint) are normalized
+# recursively; `chemical_composition`, `phase_composition`, and
+# `mechanical_properties` are open-ended (keyed by whatever element/phase/
+# property name is actually relevant to that grade -- not a fixed list
+# decided in advance) and are left as whatever the model found, defaulting
+# to {} rather than a fixed key set. A grade's mechanical properties should
+# be whatever was actually reported for it, not forced into a predetermined
+# set of property names some grades won't have data for and others might
+# report under a different name entirely.
 GRADE_TEMPLATE: Dict[str, Any] = {
     "grade_name": None,
     "chemical_composition": {},
-    "mechanical_properties": {
-        "yield_strength_mpa": None,
-        "tensile_strength_mpa": None,
-        "elongation_pct": None,
-        "hardness": {"value": None, "scale": None},
-        "impact_toughness_j": None,
-        "fatigue_strength_mpa": None,
-    },
+    "mechanical_properties": {},
     "phase_composition": {},
     "heat_treatment": {
         "process": None,
@@ -170,14 +167,7 @@ this schema, with no other commentary:
 {
   "grade_name": "string",
   "chemical_composition": {"<element>": {"min": <number|null>, "max": <number|null>, "unit": "wt%"}},
-  "mechanical_properties": {
-    "yield_strength_mpa": <number|null>,
-    "tensile_strength_mpa": <number|null>,
-    "elongation_pct": <number|null>,
-    "hardness": {"value": <number|null>, "scale": "string|null"},
-    "impact_toughness_j": <number|null>,
-    "fatigue_strength_mpa": <number|null>
-  },
+  "mechanical_properties": {"<property_name>": {"value": <number|null>, "unit": "string|null"}},
   "phase_composition": {"<phase_name>": <percent|null>},
   "heat_treatment": {
     "process": "string|null",
@@ -198,6 +188,15 @@ this schema, with no other commentary:
   "notes": "string|null",
   "sources": [{"title": "string", "url": "string"}]
 }
+
+"mechanical_properties" is open-ended -- report whatever properties you
+actually find for this grade, under whatever name makes sense for that
+property (e.g. "yield_strength_mpa", "tensile_strength_mpa",
+"elongation_pct", "hardness_hbw", "impact_toughness_j",
+"fatigue_strength_mpa", "fracture_toughness_mpa_sqrt_m", "wear_rate", ...).
+Do not force every grade into the same fixed set of properties -- some
+grades will have data for properties others don't report at all, and that
+difference is real information, not something to paper over.
 """
 
 

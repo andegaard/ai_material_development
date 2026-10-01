@@ -46,11 +46,26 @@ All six agents plus the orchestrator are scaffolded against the v2 spec in
   output; Agent V picks up that same domain automatically. Verified with a
   conflicting-limits test.
 - **Agent X broadened** beyond chemistry-only: findings' `optimizing_variable`
-  is now resolved against chemical composition, phase composition, *and*
-  heat-treatment ranges (`variable_category` tags which). Phase fractions
-  are clamped at 100%. Non-chemical variables get constraint status
-  `not_applicable` (Agent 1 has no constraints of that kind) rather than
-  the misleading `no_constraint_found`. Agent V updated to match.
+  is now resolved against chemical composition, phase composition,
+  heat-treatment, *and mechanical-property* ranges (`variable_category` tags
+  which). Phase fractions are clamped at 100%. Non-chemical variables get
+  constraint status `not_applicable` (Agent 1 has no constraints of that
+  kind) rather than the misleading `no_constraint_found`. Agent V updated
+  to match.
+- **Mechanical properties made open-ended, everywhere.** Agent 1's
+  `mechanical_properties` was a hardcoded fixed key list (yield/tensile/
+  hardness/...) — now it's keyed by whatever property name was actually
+  found per grade, same treatment as `chemical_composition`/
+  `phase_composition` already had. Agent 2 gained a `mechanical_property_range`
+  finding field (parallel to the chemical/phase/heat-treatment ones) for
+  when the literature trend *is* a mechanical property varying across
+  trials, distinct from `reported_mechanical_properties` (a single value at
+  the tested condition — grounding context, not a range to extrapolate).
+  Agent X now carries that context through onto every extrapolated
+  parameter as `literature_reported_properties` instead of silently
+  dropping it. `report_builder.py` updated to render the open-ended
+  property set as one flexible column instead of fixed Yield/Tensile/
+  Hardness columns.
 - **Swappable simulation engine**: `SimulationEngine` interface added,
   `HeuristicLinearEngine` (flat +15% rule) is the only implementation today.
   `CalphadEngine` is a documented, unimplemented stub — dropping in real

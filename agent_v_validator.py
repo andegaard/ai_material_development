@@ -16,13 +16,13 @@ domain it ran for into its own output, so Agent V reads that instead of
 merging every domain's constraints together (which could otherwise silently
 check an extrapolated value against the wrong domain's limit).
 
-Agent X now extrapolates chemical composition, phase composition, and
-heat-treatment variables (see agent_x_simulator.py). Agent 1's manufacturing
-constraints are chemistry-only, so only `variable_category: "chemical"`
-parameters get a real independent re-check against a wt% limit; phase and
-heat-treatment parameters are only checked for being correctly labeled
-`not_applicable` -- there is no constraint of that kind in Agent 1's data to
-re-derive.
+Agent X now extrapolates chemical composition, phase composition,
+heat-treatment, and mechanical-property variables (see
+agent_x_simulator.py). Agent 1's manufacturing constraints are
+chemistry-only, so only `variable_category: "chemical"` parameters get a
+real independent re-check against a wt% limit; everything else is only
+checked for being correctly labeled `not_applicable` -- there is no
+constraint of that kind in Agent 1's data to re-derive.
 """
 
 import logging
@@ -58,8 +58,8 @@ class AgentVValidator:
       claimed_status = (param.get("manufacturing_constraint_check") or {}).get("status")
 
       if category != "chemical":
-        # Agent 1 has no manufacturing constraints for phase or
-        # heat-treatment variables -- there's nothing of that kind to
+        # Agent 1 has no manufacturing constraints for phase, heat-treatment,
+        # or mechanical-property variables -- there's nothing of that kind to
         # independently re-derive. The only thing worth checking is that
         # Agent X labeled it "not_applicable" rather than claiming a wt%
         # constraint that doesn't exist for this kind of variable.

@@ -70,6 +70,22 @@ def _cell(value: Any) -> Paragraph:
   return Paragraph(escape(str(value)) if value is not None else "--", CELL_STYLE)
 
 
+def _format_properties(properties: Optional[Dict[str, Any]]) -> str:
+  """Render an open-ended {property_name: {value, unit}} dict as one
+  compact string -- there's no fixed set of properties to lay out as
+  columns, since what's actually reported varies per grade/finding."""
+  if not properties:
+    return "--"
+  parts = []
+  for name, entry in properties.items():
+    if isinstance(entry, dict):
+      value, unit = entry.get("value"), entry.get("unit") or ""
+      parts.append(f"{name}: {value} {unit}".strip())
+    else:
+      parts.append(f"{name}: {entry}")
+  return "; ".join(parts)
+
+
 def _table(headers: List[str], rows: List[List[Any]], col_widths: Optional[List[float]] = None) -> Table:
   data = [[_cell(h) for h in headers]] + [[_cell(v) for v in row] for row in rows]
   table = Table(data, colWidths=col_widths, repeatRows=1)
@@ -138,22 +154,23 @@ def _section_1(agent_1: Optional[Dict[str, Any]], agent_2: Optional[Dict[str, An
           # Legacy/malformed data (e.g. a bare grade-name string instead of
           # a full record) -- show the name, skip the detail columns rather
           # than crash the whole report over one bad entry.
-          rows.append([g, "--", "--", "--", "--", "--"])
+          rows.append([g, "--", "--", "--"])
           continue
-        hardness = (g.get("mechanical_properties") or {}).get("hardness") or {}
         rows.append([
             g.get("grade_name"),
             g.get("is_powder_metallurgy"),
-            g.get("mechanical_properties", {}).get("yield_strength_mpa"),
-            g.get("mechanical_properties", {}).get("tensile_strength_mpa"),
-            f"{hardness.get('value')} {hardness.get('scale') or ''}".strip() if hardness.get("value") else "--",
+            _format_properties(g.get("mechanical_properties")),
             ", ".join(g.get("manufacturing_methods") or []) or "--",
         ])
       if rows:
+        # mechanical_properties is open-ended (whatever Agent 1 actually
+        # found per grade, not a fixed set of columns decided in advance),
+        # so it gets one flexible joined-text column rather than a fixed
+        # Yield/Tensile/Hardness column each.
         story.append(_table(
-            ["Grade", "PM?", "Yield (MPa)", "Tensile (MPa)", "Hardness", "Manufacturing"],
+            ["Grade", "PM?", "Mechanical Properties (as found)", "Manufacturing"],
             rows,
-            col_widths=[1.1 * inch, 0.5 * inch, 0.8 * inch, 0.8 * inch, 0.8 * inch, 1.6 * inch],
+            col_widths=[1.1 * inch, 0.5 * inch, 2.5 * inch, 1.6 * inch],
         ))
       story.append(Spacer(1, 12))
 
@@ -202,14 +219,18 @@ def _section_2(agent_x: Optional[Dict[str, Any]], agent_v: Optional[Dict[str, An
     story.append(Spacer(1, 6))
     rows = [
         [p.get("base_variable"), p.get("variable_category"), p.get("literature_tested_max"),
-         p.get("extrapolated_target_value"), (p.get("manufacturing_constraint_check") or {}).get("status")]
+         p.get("extrapolated_target_value"), (p.get("manufacturing_constraint_check") or {}).get("status"),
+         _format_properties(p.get("literature_reported_properties"))]
         for p in agent_x.get("extrapolated_parameters", [])
     ]
     if rows:
+      # "Reported Context" is the literature's actual measured property at
+      # the tested condition (e.g. impact toughness at that composition) --
+      # grounding evidence behind the hypothesis, not itself extrapolated.
       story.append(_table(
-          ["Variable", "Category", "Lit. Max", "Extrapolated", "Constraint Status"],
+          ["Variable", "Category", "Lit. Max", "Extrapolated", "Constraint Status", "Reported Context"],
           rows,
-          col_widths=[1.3 * inch, 1.0 * inch, 0.9 * inch, 1.1 * inch, 1.7 * inch],
+          col_widths=[1.0 * inch, 0.8 * inch, 0.6 * inch, 0.8 * inch, 1.1 * inch, 1.7 * inch],
       ))
     story.append(Paragraph(escape(agent_x.get("confidence_note") or ""), STYLES["Note"]))
     story.append(Spacer(1, 12))
