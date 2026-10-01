@@ -84,6 +84,22 @@ All six agents plus the orchestrator are scaffolded against the v2 spec in
   research topics and priorities should reflect that.
 - **Agent V, 3, 4 walked through in detail** (role, input, output) — see
   conversation history; no code changes needed, they already matched intent.
+- **Closed a real data-loss gap between Agent 2 and Agent 3.** Agent 3 only
+  ever received Agent X's narrowed extrapolation output, never Agent 2's
+  full report — so any finding Agent X's per-variable logic didn't pick up
+  (a neutral/negative correlation worth noting, richer literature context)
+  silently never reached the roadmap stage. Agent 3 now takes
+  `agent_2_report_path` as a fourth input and reasons over the full
+  research report alongside Agent 1/X/V's data.
+- **Comparator materials**: Agent 2's finding schema is mechanism-centric
+  (one correlation, a few named variable ranges), which flattened a
+  different common case — a paper describing a *complete* alloy (full
+  composition/properties/phases/heat-treatment), not just one trend. Added
+  a parallel `materials_found` list (shaped like Agent 1's own grade
+  record) for exactly that, aggregated and source-filtered the same way as
+  `breakthrough_findings`. Not passed to Agent X (nothing there to
+  extrapolate — it's reference data) but passed to Agent 3, and rendered in
+  `report_builder.py`'s Section 1.
 - **Consolidated PDF report** (`report_builder.py`): reads whatever stage
   output files exist and renders one PDF with a section per
   Agent-1&2/Agent-X&V/Agent-3/Agent-4. Tolerant of a partial run — a stage

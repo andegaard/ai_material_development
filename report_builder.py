@@ -199,6 +199,21 @@ def _section_1(agent_1: Optional[Dict[str, Any]], agent_2: Optional[Dict[str, An
           find_rows,
           col_widths=[2.2 * inch, 0.8 * inch, 0.9 * inch, 1.4 * inch, 0.7 * inch],
       ))
+    story.append(Spacer(1, 8))
+
+    materials = agent_2.get("materials_found", [])
+    if materials:
+      story.append(Paragraph("Comparator materials found in literature", STYLES["Heading2"]))
+      mat_rows = [
+          [m.get("material_name"), _format_properties(m.get("mechanical_properties")),
+           m.get("research_topic"), len(m.get("sources") or [])]
+          for m in materials
+      ]
+      story.append(_table(
+          ["Material", "Mechanical Properties (as found)", "Topic", "#Sources"],
+          mat_rows,
+          col_widths=[1.4 * inch, 2.6 * inch, 1.4 * inch, 0.6 * inch],
+      ))
     story.append(Spacer(1, 12))
 
   return story

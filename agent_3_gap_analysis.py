@@ -7,6 +7,16 @@ principles. Takes Agent V's validation findings as an explicit input: any
 `contradiction_found` entry must be addressed in the roadmap rather than
 silently built upon, per agent_instructions.md section 4.
 
+Also takes Agent 2's full report directly, not just what Agent X extracted
+from it. Agent X only carries forward findings it could resolve as a named
+variable against one of its four range fields -- Agent 2's
+`materials_found` (complete comparator alloys from the literature) and any
+finding Agent X's narrow per-variable logic didn't pick up would otherwise
+never reach this stage at all. Agent 3 is the one agent positioned to
+actually compare the company's current materials against what the broader
+literature describes, so it needs the full picture, not a pre-filtered
+slice of it.
+
 Produces both deliverables the spec calls for -- a human-readable Markdown
 narrative and a structured JSON form for Agent 4 -- from a single model
 call, so the two can't drift apart from each other.
@@ -43,6 +53,15 @@ X may have missed -- you MUST explicitly address each one in your roadmap
 (e.g. "this recipe requires raising the Mn ceiling -- flagged for review"),
 never silently build a recipe on top of it.
 
+You are given Agent 2's full frontier-research report, not just the
+extrapolated parameters Agent X derived from it. Use "materials_found" (full
+comparator alloys from the literature) to ground your gap analysis in actual
+competing/reference materials where available, not only the extrapolated
+numbers. Also check "breakthrough_findings" for anything relevant that Agent
+X's extrapolation didn't carry forward (e.g. a negative/neutral correlation
+worth flagging as a risk, or a finding whose variable didn't resolve against
+Agent X's range fields).
+
 Use moderate creativity for cross-domain reasoning, but stay grounded in the
 data you're given -- do not invent capabilities or constraints not present
 in the input.
@@ -68,12 +87,16 @@ class Agent3GapAnalysis:
   def run(
       self,
       agent_1_baseline_path: str,
+      agent_2_report_path: str,
       agent_x_simulation_path: str,
       agent_v_validation_path: str,
       markdown_output_path: str = "agent_3_roadmap.md",
       json_output_path: str = "agent_3_roadmap.json",
   ) -> Dict[str, Any]:
     baseline = load_json_validated(agent_1_baseline_path, required_keys=["domains"])
+    research = load_json_validated(
+        agent_2_report_path, required_keys=["breakthrough_findings", "materials_found"]
+    )
     simulation = load_json_validated(
         agent_x_simulation_path, required_keys=["extrapolated_parameters"]
     )
@@ -91,14 +114,18 @@ class Agent3GapAnalysis:
 1. BASELINE MANUFACTURING PORTFOLIO (Agent 1):
 {json.dumps(baseline, indent=2)}
 
-2. EXTRAPOLATED ALLOY RECIPES (Agent X):
+2. FRONTIER RESEARCH -- FINDINGS & COMPARATOR MATERIALS (Agent 2):
+{json.dumps(research, indent=2)}
+
+3. EXTRAPOLATED ALLOY RECIPES (Agent X):
 {json.dumps(simulation, indent=2)}
 
-3. INDEPENDENT VALIDATION FINDINGS (Agent V):
+4. INDEPENDENT VALIDATION FINDINGS (Agent V):
 {json.dumps(validation, indent=2)}
 
 Generate a comprehensive Strategic Gap Analysis & R&D Roadmap covering:
-1. Performance/process gaps between current production and simulated prototypes.
+1. Performance/process gaps between current production and simulated
+   prototypes -- and against any comparator materials_found in (2).
 2. Technical contradictions encountered (including every Agent V finding with
    status "contradiction_found" -- address each one by name).
 3. Specific TRIZ principles applied to resolve these limitations.
@@ -134,6 +161,7 @@ if __name__ == "__main__":
   agent_3 = Agent3GapAnalysis()
   agent_3.run(
       agent_1_baseline_path="temp_data/agent_1_baseline.json",
+      agent_2_report_path="temp_data/agent_2_report.json",
       agent_x_simulation_path="temp_data/agent_x_simulation_results.json",
       agent_v_validation_path="temp_data/agent_v_validation.json",
       markdown_output_path="temp_data/agent_3_roadmap.md",

@@ -95,6 +95,7 @@ def run_pipeline(company: str, company_url: str) -> None:
   agent_3 = Agent3GapAnalysis()
   agent_3.run(
       agent_1_baseline_path=_path("agent_1_baseline.json"),
+      agent_2_report_path=_path("agent_2_report.json"),
       agent_x_simulation_path=_path("agent_x_simulation_results.json"),
       agent_v_validation_path=_path("agent_v_validation.json"),
       markdown_output_path=_path("agent_3_roadmap.md"),

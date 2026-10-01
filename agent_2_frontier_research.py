@@ -45,11 +45,24 @@ properties the literature actually gives you, under whatever name fits.
 Separately, a finding's reported_mechanical_properties (a single reported
 value at the tested condition, not a range) is carried through to Agent X
 as grounding context rather than something to extrapolate.
+
+Findings are mechanism-centric: one correlation, up to four range fields
+tied to named variables. That flattens a different, common case -- a paper
+describing a *complete* comparator alloy (full composition, properties,
+phases, heat treatment) rather than a single mechanism trend. Those go in a
+separate `materials_found` list, shaped like Agent 1's own grade record, so
+a real alloy a company doesn't currently make isn't squeezed into a
+one-variable-at-a-time schema just because that's what findings use.
+`materials_found` isn't passed to Agent X (there's nothing there to
+extrapolate -- it's reference data, not a trend), but it is passed to
+Agent 3 (along with this entire report, not just what Agent X extracted
+from it) so the gap-analysis stage can reason over genuine comparator
+materials and findings Agent X's narrow per-variable logic didn't pick up.
 """
 
 import json
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from common import (
     WEB_SEARCH_TOOL,
@@ -70,7 +83,8 @@ ESCALATED_MODEL = "claude-fable-5-1"  # for the most demanding synthesis cases
 MAX_RESEARCH_TOPICS_PER_DOMAIN = 15  # bounds cost/runtime; raise if needed
 
 REQUIRED_OUTPUT_KEYS = [
-    "domain", "performance_priorities", "research_topics_investigated", "breakthrough_findings",
+    "domain", "performance_priorities", "research_topics_investigated",
+    "breakthrough_findings", "materials_found",
 ]
 
 PLANNING_SYSTEM_PROMPT = """You are an academic metallurgist and trend
@@ -138,6 +152,18 @@ this schema, with no other commentary:
       "reported_mechanical_properties": {"<property_name>": {"value": <number>, "unit": "string"}},
       "sources": [{"title": "string", "url": "string"}]
     }
+  ],
+  "materials_found": [
+    {
+      "material_name": "string -- the specific alloy/grade name as reported, or a descriptive label if the paper didn't name it",
+      "chemical_composition": {"<element>": {"min": <number|null>, "max": <number|null>, "unit": "wt%"}},
+      "mechanical_properties": {"<property_name>": {"value": <number|null>, "unit": "string|null"}},
+      "phase_composition": {"<phase_name>": <percent|null>},
+      "heat_treatment": {"process": "string|null", "austenitizing_temp_c": <number|null>, "quench_medium": "string|null", "tempering_temp_c": <number|null>},
+      "manufacturing_methods": ["string"],
+      "notes": "string|null",
+      "sources": [{"title": "string", "url": "string"}]
+    }
   ]
 }
 
@@ -160,6 +186,18 @@ Include whichever of "chemical_composition_range", "phase_composition_range",
 relevant and sourced for a given finding -- you do not need to fill all four
 for every finding, and should leave a range object out entirely if you have
 no sourced data for it.
+
+"findings" vs. "materials_found" capture different things. A "finding" is
+one mechanism/trend (one correlation, a variable or two, a range). Use
+"materials_found" instead when a source describes a *complete* specific
+alloy in enough detail to be worth recording as its own material record
+(composition, properties, phases, heat treatment) -- e.g. a competitor
+grade, a research alloy, or a named variant from a review paper. Don't
+force a rich material description into a single-variable finding just
+because that's the other schema available; don't invent a materials_found
+entry from a finding that only reports one variable's range either. Leave
+materials_found empty for this topic if nothing in the literature actually
+warrants a full material record.
 """
 
 
@@ -186,21 +224,27 @@ class Agent2FrontierResearch:
     topics = topics[: self.max_topics_per_domain]
 
     all_findings: List[Dict[str, Any]] = []
+    all_materials: List[Dict[str, Any]] = []
     for topic in topics:
-      all_findings.extend(self._research_topic(domain_name, topic, priorities))
+      findings, materials = self._research_topic(domain_name, topic, priorities)
+      all_findings.extend(findings)
+      all_materials.extend(materials)
 
     all_findings = require_sources(all_findings, entry_label="finding")
+    all_materials = require_sources(all_materials, entry_label="material")
 
     result = {
         "domain": domain_name,
         "performance_priorities": priorities,
         "research_topics_investigated": topics,
         "breakthrough_findings": all_findings,
+        "materials_found": all_materials,
     }
     save_json_validated(result, output_path, required_keys=REQUIRED_OUTPUT_KEYS)
     logger.info(
-        "Wrote %d sourced finding(s) across %d topic(s) to '%s'.",
-        len(all_findings), len(topics), output_path,
+        "Wrote %d sourced finding(s) and %d comparator material(s) across "
+        "%d topic(s) to '%s'.",
+        len(all_findings), len(all_materials), len(topics), output_path,
     )
     return result
 
@@ -225,7 +269,7 @@ class Agent2FrontierResearch:
 
   def _research_topic(
       self, domain_name: str, topic: str, priorities: List[Dict[str, Any]]
-  ) -> List[Dict[str, Any]]:
+  ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     logger.info("Researching sub-topic '%s'...", topic)
 
     user_message = (
@@ -248,12 +292,17 @@ class Agent2FrontierResearch:
       data = extract_json_object(extract_text(response))
     except PipelineHalt as exc:
       logger.warning("Could not research sub-topic '%s': %s. Skipping.", topic, exc)
-      return []
+      return [], []
 
     findings = data.get("findings", [])
     for finding in findings:
       finding["research_topic"] = topic
-    return findings
+
+    materials = data.get("materials_found", [])
+    for material in materials:
+      material["research_topic"] = topic
+
+    return findings, materials
 
 
 if __name__ == "__main__":

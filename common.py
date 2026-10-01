@@ -150,9 +150,8 @@ def require_sources(entries: List[Dict[str, Any]], *, entry_label: str = "entry"
   kept = []
   for entry in entries:
     if not entry.get("sources"):
-      logger.warning(
-          "Dropping %s with no source: %r", entry_label, entry.get("mechanism") or entry
-      )
+      name = entry.get("mechanism") or entry.get("material_name") or entry
+      logger.warning("Dropping %s with no source: %r", entry_label, name)
       continue
     kept.append(entry)
   return kept
