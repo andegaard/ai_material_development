@@ -9,13 +9,23 @@ Agent 1 -> [Checkpoint 1: pick domain] -> Agent 2 -> Agent X -> Agent V ->
 [halt + review if contradiction_found] -> Agent 3 ->
 [Checkpoint 2: approve roadmap] -> Agent 4 -> consolidated PDF report
 
+Usage:
+    python orchestrator.py "Company Name" "https://company-website.com"
+
+All output files for a run are written under runs/<sanitized company name>/,
+so each company's project data stays in its own folder. Re-running the same
+company name reuses (and overwrites) that same folder rather than creating a
+new one each time.
+
 A consolidated PDF report (see report_builder.py) is built at the end of a
 full run, and also on any halt -- whatever stages completed are rendered
 normally, anything that didn't run yet is labeled as such.
 """
 
+import argparse
 import logging
 import os
+import re
 
 from agent_1_market_intelligence import Agent1MarketIntelligence
 from agent_2_frontier_research import Agent2FrontierResearch
@@ -29,15 +39,20 @@ from report_builder import build_report
 logging.basicConfig(level=logging.INFO, format="[Orchestrator] %(message)s")
 logger = logging.getLogger("orchestrator")
 
-DATA_DIR = "temp_data"
+RUNS_DIR = "runs"
 
 
-def _path(name: str) -> str:
-  return os.path.join(DATA_DIR, name)
+def _sanitize_folder_name(name: str) -> str:
+  """Turn a company name into a safe, filesystem-friendly directory name."""
+  sanitized = re.sub(r"[^A-Za-z0-9._-]+", "_", name.strip())
+  return sanitized.strip("_") or "unnamed_company"
 
 
-def run_pipeline(company: str, company_url: str) -> None:
-  os.makedirs(DATA_DIR, exist_ok=True)
+def run_pipeline(company: str, company_url: str, data_dir: str) -> None:
+  os.makedirs(data_dir, exist_ok=True)
+
+  def _path(name: str) -> str:
+    return os.path.join(data_dir, name)
 
   logger.info("=== STEP 1: Agent 1 (Market Intelligence) ===")
   agent_1 = Agent1MarketIntelligence()
@@ -116,17 +131,26 @@ def run_pipeline(company: str, company_url: str) -> None:
       json_output_path=_path("agent_4_audit.json"),
   )
 
-  report_path = build_report(data_dir=DATA_DIR, output_path=_path("pipeline_report.pdf"))
-  logger.info("=== PIPELINE COMPLETE. See '%s/' for all reports, including '%s'. ===", DATA_DIR, report_path)
+  report_path = build_report(data_dir=data_dir, output_path=_path("pipeline_report.pdf"))
+  logger.info("=== PIPELINE COMPLETE. See '%s/' for all reports, including '%s'. ===", data_dir, report_path)
 
 
 if __name__ == "__main__":
+  parser = argparse.ArgumentParser(
+      description="Run the multi-agent steel R&D pipeline for one company."
+  )
+  parser.add_argument("company", help="Company name, e.g. 'SSAB'")
+  parser.add_argument("company_url", help="Company's main web page, e.g. 'https://www.ssab.com'")
+  args = parser.parse_args()
+
+  data_dir = os.path.join(RUNS_DIR, _sanitize_folder_name(args.company))
+
   try:
-    run_pipeline(company="SSAB", company_url="https://www.ssab.com")
+    run_pipeline(company=args.company, company_url=args.company_url, data_dir=data_dir)
   except PipelineHalt as exc:
     logger.error("Pipeline halted: %s", exc)
     # Still worth a report -- whatever stages did complete are rendered
     # normally, and anything that didn't run yet is labeled as such rather
     # than silently missing.
-    build_report(data_dir=DATA_DIR, output_path=os.path.join(DATA_DIR, "pipeline_report.pdf"))
+    build_report(data_dir=data_dir, output_path=os.path.join(data_dir, "pipeline_report.pdf"))
     raise SystemExit(1)

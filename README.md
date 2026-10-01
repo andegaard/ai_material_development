@@ -10,6 +10,51 @@ each major stage.
 See [`agent_instructions.md`](agent_instructions.md) for the full agent
 architecture, model assignments, JSON data contracts, and pipeline diagram.
 
+## How to run
+
+```bash
+pip install -r requirements.txt
+cp .env.example .env    # fill in a real ANTHROPIC_API_KEY
+
+python orchestrator.py "Company Name" "https://company-website.com"
+```
+
+All output for that run is written to `runs/<sanitized company name>/`
+(e.g. `runs/SSAB/`), including the final `pipeline_report.pdf`. Re-running
+the same company name reuses (and overwrites) that same folder. You'll be
+prompted twice during the run: once to pick a domain after Agent 1, once to
+approve the roadmap after Agent 3 — see "Before running" below for API
+details worth double-checking first.
+
+### Estimated cost per run
+
+Based on current published pricing (Agent 1/4 use `claude-sonnet-5` at
+$2/$10 per MTok in/out, Agent 2/3 use `claude-opus-5-5` at $4/$20 per MTok;
+Agent X/V/report-builder make no API calls at all):
+
+| Company size | Agent 1 calls | Agent 2 calls | Rough total |
+|---|---|---|---|
+| Small (1-2 domains, ~8 grades total) | ~9 | ~9 (1 planning + ~8 topics) | **~$1** |
+| Medium (3 domains, ~30 grades total) | ~31 | ~16 (capped at 15 topics) | **~$2** |
+| Large (5+ domains, 75+ grades, capped at 15/domain) | ~76 | ~16 (same cap — only the one selected domain) | **~$3-4** |
+
+**Agent 1 is the dominant, most variable cost** — it runs one research call
+per grade, per domain (capped at `MAX_GRADES_PER_DOMAIN=15`), for *every*
+domain it finds, not just the one you'll eventually select. A company with
+a broad portfolio costs noticeably more to map than one with a narrow one.
+Agent 2 is comparatively fixed since it only ever researches the one domain
+picked at Checkpoint 1.
+
+Take these numbers as directional, not precise, for two reasons: (1) the
+`web_search` tool's ingested search results count as input tokens and are
+not bounded by `max_tokens` the way output is, so actual input token usage
+per call is genuinely hard to predict without running it; (2) a per-search
+tool fee may apply on top of token costs — check your Anthropic console's
+usage page for the confirmed figure. For a precise estimate before a real
+run, use `client.messages.count_tokens()` on a representative prompt, or
+just run once against a real company and read `response.usage` to calibrate
+the numbers above.
+
 ## Status
 
 All six agents plus the orchestrator are scaffolded against the v2 spec in
@@ -107,6 +152,15 @@ All six agents plus the orchestrator are scaffolded against the v2 spec in
   crashing the report. Wired into `orchestrator.py`: builds automatically
   at the end of a full run, and also on any `PipelineHalt` so a rejected/
   halted run still produces a report of whatever did complete.
+- **Runnable from the command line, per-company output folders.**
+  `orchestrator.py` was hardcoded to always run SSAB with no way to target
+  another company. Now takes `company`/`company_url` as CLI args and writes
+  everything to `runs/<sanitized company name>/` instead of a fixed
+  `temp_data/` — each company's project data stays in its own folder, and
+  re-running a company reuses (overwrites) its own folder rather than
+  colliding with another's. Verified end to end with a fully mocked run
+  (company name with spaces/punctuation correctly sanitized to a safe
+  directory name, all output including the PDF landing in that folder).
 
 **Explicitly not done / honest limitations:**
 - No real thermodynamic computation anywhere. `heuristic_linear_extrapolation`

@@ -5,5 +5,6 @@ __pycache__/
 *.env
 !*.env.example
 temp_data/
+runs/
 .venv/
 venv/
