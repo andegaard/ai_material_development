@@ -109,10 +109,31 @@ class Agent3GapAnalysis:
           len(contradictions),
       )
 
+    # Agent 2/X/V are all scoped to the one domain picked at Checkpoint 1;
+    # Agent 3 should be too. Passing Agent 1's *entire* baseline (every
+    # domain, not just the selected one) burns tokens/cost on irrelevant
+    # domains and makes output truncation more likely as a company's
+    # portfolio grows. Fall back to the full baseline (with a warning)
+    # rather than halting if the domain can't be found -- this is a
+    # cost/quality optimization, not something worth failing the run over.
+    domain_name = simulation.get("domain")
+    selected_domain = next(
+        (d for d in baseline.get("domains", []) if d.get("domain_name") == domain_name), None
+    )
+    if selected_domain is None:
+      logger.warning(
+          "Could not find domain '%s' in Agent 1's baseline; passing the "
+          "full baseline to Agent 3 instead of just the selected domain.",
+          domain_name,
+      )
+      scoped_baseline = baseline
+    else:
+      scoped_baseline = {"company": baseline.get("company"), "domains": [selected_domain]}
+
     user_message = f"""Here is the data for your analysis:
 
-1. BASELINE MANUFACTURING PORTFOLIO (Agent 1):
-{json.dumps(baseline, indent=2)}
+1. BASELINE MANUFACTURING PORTFOLIO (Agent 1), scoped to the selected domain:
+{json.dumps(scoped_baseline, indent=2)}
 
 2. FRONTIER RESEARCH -- FINDINGS & COMPARATOR MATERIALS (Agent 2):
 {json.dumps(research, indent=2)}
@@ -135,7 +156,11 @@ Generate a comprehensive Strategic Gap Analysis & R&D Roadmap covering:
     def make_call():
       return self.client.messages.create(
           model=MODEL,
-          max_tokens=6000,
+          # Needs room for a full Markdown narrative *and* three structured
+          # JSON sections; 6000 was tight even before materials_found and
+          # the broadened finding schema made the input larger too. Still
+          # well under the non-streaming client timeout at this size.
+          max_tokens=16000,
           system=SYSTEM_PROMPT,
           messages=[{"role": "user", "content": user_message}],
       )

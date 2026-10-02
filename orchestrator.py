@@ -26,6 +26,7 @@ import argparse
 import logging
 import os
 import re
+from typing import Any, List, Optional
 
 from agent_1_market_intelligence import Agent1MarketIntelligence
 from agent_2_frontier_research import Agent2FrontierResearch
@@ -48,6 +49,32 @@ def _sanitize_folder_name(name: str) -> str:
   return sanitized.strip("_") or "unnamed_company"
 
 
+def _select_by_1_indexed_choice(items: List[Any], choice: str) -> Optional[Any]:
+  """Parse a human's 1-indexed menu choice, with an explicit bounds check.
+
+  `items[int(choice) - 1]` alone is not safe: Python's negative indexing
+  means an input of "0" silently resolves to `items[-1]` (the *last* item)
+  instead of raising, and any negative number wraps the same way -- a
+  mistyped "0" would silently drive the rest of the pipeline off the wrong
+  domain with no error at all. Returns None for anything outside
+  [1, len(items)], including non-numeric input.
+  """
+  try:
+    n = int(choice)
+  except ValueError:
+    return None
+  if n < 1 or n > len(items):
+    return None
+  return items[n - 1]
+
+
+def _confirm(prompt: str) -> bool:
+  """Accept 'y' or 'yes' (any case) as confirmation -- the literal single
+  character 'y' only is an easy way to accidentally halt on a typed-out
+  'yes'."""
+  return input(prompt).strip().lower() in ("y", "yes")
+
+
 def run_pipeline(company: str, company_url: str, data_dir: str) -> None:
   os.makedirs(data_dir, exist_ok=True)
 
@@ -68,9 +95,8 @@ def run_pipeline(company: str, company_url: str, data_dir: str) -> None:
 
   print("\n\U0001F6D1 Human-in-the-Loop Checkpoint 1: Domain Selection")
   choice = input(f"Select a domain [1-{len(domains)}] to drive Agent 2: ").strip()
-  try:
-    selected_domain = domains[int(choice) - 1]
-  except (ValueError, IndexError):
+  selected_domain = _select_by_1_indexed_choice(domains, choice)
+  if selected_domain is None:
     raise PipelineHalt(f"Invalid domain selection: {choice!r}")
   logger.info("Human selected domain: '%s'", selected_domain.get("domain_name"))
 
@@ -102,8 +128,7 @@ def run_pipeline(company: str, company_url: str, data_dir: str) -> None:
     for finding in validation["findings"]:
       if finding["status"] == "contradiction_found":
         print(f"  - {finding}")
-    proceed = input("Proceed to Agent 3 anyway? [y/N]: ").strip().lower()
-    if proceed != "y":
+    if not _confirm("Proceed to Agent 3 anyway? [y/N]: "):
       raise PipelineHalt("Halted at Agent V checkpoint by human operator.")
 
   logger.info("=== STEP 3: Agent 3 (Gap Analysis & TRIZ) ===")
@@ -119,8 +144,7 @@ def run_pipeline(company: str, company_url: str, data_dir: str) -> None:
 
   print("\n\U0001F6D1 Human-in-the-Loop Checkpoint 2: Roadmap Review")
   print(f"Review '{_path('agent_3_roadmap.md')}' before continuing to Agent 4.")
-  proceed = input("Approve roadmap and proceed to Agent 4 (IP/LCA audit)? [y/N]: ").strip().lower()
-  if proceed != "y":
+  if not _confirm("Approve roadmap and proceed to Agent 4 (IP/LCA audit)? [y/N]: "):
     raise PipelineHalt("Halted at roadmap review checkpoint by human operator.")
 
   logger.info("=== STEP 4: Agent 4 (IP-Freedom & LCA Audit) ===")
@@ -147,10 +171,20 @@ if __name__ == "__main__":
 
   try:
     run_pipeline(company=args.company, company_url=args.company_url, data_dir=data_dir)
-  except PipelineHalt as exc:
-    logger.error("Pipeline halted: %s", exc)
-    # Still worth a report -- whatever stages did complete are rendered
-    # normally, and anything that didn't run yet is labeled as such rather
-    # than silently missing.
-    build_report(data_dir=data_dir, output_path=os.path.join(data_dir, "pipeline_report.pdf"))
-    raise SystemExit(1)
+  except Exception as exc:
+    # Catches more than PipelineHalt on purpose: a real bug (in this code,
+    # not the pipeline's own data) should still leave behind a report of
+    # whatever stages did complete -- that's exactly the situation where a
+    # partial report is most useful for debugging, and a narrower except
+    # here would skip it entirely.
+    if isinstance(exc, PipelineHalt):
+      logger.error("Pipeline halted: %s", exc)
+    else:
+      logger.error("Pipeline failed with an unexpected error: %s", exc, exc_info=True)
+
+    try:
+      build_report(data_dir=data_dir, output_path=os.path.join(data_dir, "pipeline_report.pdf"))
+    except Exception as report_exc:  # noqa: BLE001 - don't let this mask the original failure
+      logger.error("Also failed to build the fallback report: %s", report_exc)
+
+    raise SystemExit(1) from exc

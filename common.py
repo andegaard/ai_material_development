@@ -85,11 +85,29 @@ def call_with_retry(
 ) -> T:
   """Call `fn` with exponential backoff, per the pipeline's error-handling
   policy. Raises `PipelineHalt` (not the original exception) once attempts
-  are exhausted, so callers only need to handle one failure type."""
+  are exhausted, so callers only need to handle one failure type.
+
+  Only retries failures that might actually succeed on a later attempt
+  (rate limits, transient network errors, 5xx server errors). A malformed
+  request (bad model name, invalid parameter) or an auth/permission problem
+  fails immediately instead of being retried 2 more times for no reason --
+  the request itself is wrong, not unlucky, and retrying just burns time.
+  """
+  import anthropic  # lazy, matching get_anthropic_client's import style below
+
+  non_retryable = (
+      anthropic.BadRequestError,
+      anthropic.AuthenticationError,
+      anthropic.PermissionDeniedError,
+      anthropic.NotFoundError,
+  )
+
   last_exc: Optional[Exception] = None
   for attempt in range(1, attempts + 1):
     try:
       return fn()
+    except non_retryable as exc:
+      raise PipelineHalt(f"{label} failed with a non-retryable error: {exc}") from exc
     except Exception as exc:  # noqa: BLE001 - deliberate retry boundary
       last_exc = exc
       logger.warning("%s failed (attempt %d/%d): %s", label, attempt, attempts, exc)
@@ -109,17 +127,33 @@ def get_anthropic_client():
   return Anthropic(api_key=api_key)
 
 
-# NOTE -- VERIFY BEFORE RUNNING: these are the hosted server-tool type
-# strings as of this writing. Confirm them against the current Anthropic API
-# docs before the pipeline actually runs; server-tool type versions
-# (the "_YYYYMMDD" suffix) do change between API releases.
-WEB_SEARCH_TOOL = {"type": "web_search_20250305", "name": "web_search"}
-WEB_FETCH_TOOL = {"type": "web_fetch_20250910", "name": "web_fetch"}
+# Hosted server-tool type strings. These are the current dynamic-filtering
+# variants (confirmed current as of this writing for claude-sonnet-5 and
+# claude-opus-5-5, both of which this pipeline uses) -- server-tool type
+# versions (the "_YYYYMMDD" suffix) do change between API releases, so
+# re-confirm against the Anthropic API docs if either model is changed.
+WEB_SEARCH_TOOL = {"type": "web_search_20260209", "name": "web_search"}
+WEB_FETCH_TOOL = {"type": "web_fetch_20260209", "name": "web_fetch"}
 
 
 def extract_text(response: Any) -> str:
   """Concatenate every text block in a Messages API response, skipping
-  tool_use / server_tool_use / tool_result blocks."""
+  tool_use / server_tool_use / tool_result blocks.
+
+  Raises `PipelineHalt` immediately if the model declined the request
+  (`stop_reason == "refusal"`) instead of letting the caller discover this
+  later as a confusing "no JSON object found in model output" error -- a
+  refusal has no text/JSON to extract, and retrying the identical prompt
+  (as `call_with_retry` would do upstream) won't change the outcome.
+  """
+  if getattr(response, "stop_reason", None) == "refusal":
+    details = getattr(response, "stop_details", None)
+    category = getattr(details, "category", None) if details else None
+    explanation = getattr(details, "explanation", None) if details else None
+    raise PipelineHalt(
+        f"Model declined the request (refusal, category={category!r}): "
+        f"{explanation or 'no explanation given'}"
+    )
   return "".join(
       block.text for block in response.content if getattr(block, "type", None) == "text"
   )

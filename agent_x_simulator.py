@@ -103,7 +103,19 @@ class HeuristicLinearEngine(SimulationEngine):
     if tested_max is None:
       return None
 
-    extrapolated_value = round(tested_max * EXTRAPOLATION_FACTOR, 3)
+    try:
+      extrapolated_value = round(tested_max * EXTRAPOLATION_FACTOR, 3)
+    except TypeError:
+      # The model returned a non-numeric "max" (e.g. a string) -- there's no
+      # key presence check that catches a wrong value *type*, so this
+      # degrades to "can't extrapolate" (logged and skipped by the caller)
+      # instead of crashing the whole run on one malformed finding.
+      logger.warning(
+          "Variable '%s' has a non-numeric literature max (%r); cannot extrapolate.",
+          variable, tested_max,
+      )
+      return None
+
     if category == "phase":
       extrapolated_value = min(extrapolated_value, 100.0)
 
@@ -302,11 +314,19 @@ class AgentXSimulator:
     if constraint is None:
       return {"limit": None, "unit": None, "status": "no_constraint_found"}
 
-    status = (
-        "exceeds_limit"
-        if extrapolated_value > constraint["max"]
-        else "within_limit"
-    )
+    try:
+      status = "exceeds_limit" if extrapolated_value > constraint["max"] else "within_limit"
+    except TypeError:
+      # constraint["max"] is present but not a number (e.g. Agent 1's model
+      # output a string) -- there's genuinely no usable limit to check
+      # against, which is exactly what "no_constraint_found" already means.
+      logger.warning(
+          "Manufacturing constraint for '%s' has a non-numeric max (%r); "
+          "treating as no usable constraint.",
+          variable, constraint.get("max"),
+      )
+      return {"limit": None, "unit": None, "status": "no_constraint_found"}
+
     return {
         "limit": constraint["max"],
         "unit": constraint.get("unit", "wt%"),

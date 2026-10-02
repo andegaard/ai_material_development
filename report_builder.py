@@ -67,14 +67,27 @@ def _not_run(label: str) -> List[Any]:
 def _cell(value: Any) -> Paragraph:
   """Wrap a table cell's text in a Paragraph so it word-wraps instead of
   overflowing -- plain strings in reportlab Table cells don't wrap."""
-  return Paragraph(escape(str(value)) if value is not None else "--", CELL_STYLE)
+  if value is None:
+    text = "--"
+  elif isinstance(value, (list, tuple)):
+    # e.g. optimizing_variable can be a single name or a list of names --
+    # render "Mn, retained_austenite" instead of Python's "['Mn', ...]" repr.
+    text = ", ".join(str(v) for v in value)
+  else:
+    text = str(value)
+  return Paragraph(escape(text), CELL_STYLE)
 
 
-def _format_properties(properties: Optional[Dict[str, Any]]) -> str:
+def _format_properties(properties: Optional[Any]) -> str:
   """Render an open-ended {property_name: {value, unit}} dict as one
   compact string -- there's no fixed set of properties to lay out as
-  columns, since what's actually reported varies per grade/finding."""
-  if not properties:
+  columns, since what's actually reported varies per grade/finding.
+
+  Defensive against malformed input (e.g. a list where a dict was expected)
+  the same way the rest of this file is about agent output that doesn't
+  match its schema -- report_builder's whole job is to not crash on it.
+  """
+  if not properties or not isinstance(properties, dict):
     return "--"
   parts = []
   for name, entry in properties.items():
@@ -132,7 +145,7 @@ def _section_1(agent_1: Optional[Dict[str, Any]], agent_2: Optional[Dict[str, An
   if agent_1 is None:
     story += _not_run("Agent 1")
   else:
-    story.append(Paragraph(f"Company: {escape(agent_1.get('company', '--'))}", STYLES["Normal"]))
+    story.append(Paragraph(f"Company: {escape(agent_1.get('company') or '--')}", STYLES["Normal"]))
     domains = agent_1.get("domains", [])
     story.append(Paragraph(f"Domains mapped: {', '.join(d.get('domain_name', '?') for d in domains)}", STYLES["Normal"]))
     story.append(Spacer(1, 8))
@@ -361,7 +374,7 @@ def build_report(data_dir: str = "temp_data", output_path: str = "pipeline_repor
   doc = SimpleDocTemplate(output_path, pagesize=letter, topMargin=0.75 * inch, bottomMargin=0.75 * inch)
   story: List[Any] = [
       Paragraph("Steel R&amp;D Pipeline Report", STYLES["Title"]),
-      Paragraph(escape(agent_1.get("company")) if agent_1 else "Company: not yet known", STYLES["Normal"]),
+      Paragraph(escape(agent_1.get("company") or "Unknown") if agent_1 else "Company: not yet known", STYLES["Normal"]),
       Spacer(1, 12),
   ]
   story += _section_1(agent_1, agent_2)
