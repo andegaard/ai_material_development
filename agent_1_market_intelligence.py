@@ -104,9 +104,14 @@ GRADE_TEMPLATE: Dict[str, Any] = {
 # model's own JSON like every other field above.
 
 
-def _is_pm_method(method: str) -> bool:
+def _is_pm_method(method: Any) -> bool:
   """Matches 'powder metallurgy', 'PM', 'P/M', case-insensitively --
-  whatever phrasing the model used for this manufacturing_methods entry."""
+  whatever phrasing the model used for this manufacturing_methods entry.
+  Not wrapped in the same try/except as the API call that produced this
+  list, so a non-string entry (e.g. a stray null) here would otherwise
+  crash this whole grade's processing, not just degrade it."""
+  if not isinstance(method, str):
+    return False
   normalized = method.strip().lower()
   return "powder" in normalized or normalized in ("pm", "p/m")
 

@@ -147,7 +147,7 @@ def _section_1(agent_1: Optional[Dict[str, Any]], agent_2: Optional[Dict[str, An
   else:
     story.append(Paragraph(f"Company: {escape(agent_1.get('company') or '--')}", STYLES["Normal"]))
     domains = agent_1.get("domains", [])
-    story.append(Paragraph(f"Domains mapped: {', '.join(d.get('domain_name', '?') for d in domains)}", STYLES["Normal"]))
+    story.append(Paragraph(f"Domains mapped: {', '.join(d.get('domain_name') or '?' for d in domains)}", STYLES["Normal"]))
     story.append(Spacer(1, 8))
 
     # Agent 2 is scoped to one domain; show that domain's grades in detail.
@@ -155,7 +155,7 @@ def _section_1(agent_1: Optional[Dict[str, Any]], agent_2: Optional[Dict[str, An
     selected_domain = next((d for d in domains if d.get("domain_name") == selected_name), domains[0] if domains else None)
 
     if selected_domain:
-      story.append(Paragraph(f"Domain detail: {escape(selected_domain.get('domain_name', '?'))}", STYLES["Heading2"]))
+      story.append(Paragraph(f"Domain detail: {escape(selected_domain.get('domain_name') or '?')}", STYLES["Heading2"]))
       story.append(Paragraph(escape(selected_domain.get("domain_description") or ""), STYLES["Normal"]))
       pm = selected_domain.get("includes_powder_metallurgy")
       story.append(Paragraph(f"Includes powder metallurgy grades: {pm if pm is not None else 'unknown'}", STYLES["Normal"]))
@@ -173,7 +173,7 @@ def _section_1(agent_1: Optional[Dict[str, Any]], agent_2: Optional[Dict[str, An
             g.get("grade_name"),
             g.get("is_powder_metallurgy"),
             _format_properties(g.get("mechanical_properties")),
-            ", ".join(g.get("manufacturing_methods") or []) or "--",
+            ", ".join(m or "?" for m in (g.get("manufacturing_methods") or [])) or "--",
         ])
       if rows:
         # mechanical_properties is open-ended (whatever Agent 1 actually
@@ -197,7 +197,7 @@ def _section_1(agent_1: Optional[Dict[str, Any]], agent_2: Optional[Dict[str, An
     story.append(Spacer(1, 8))
 
     topics = agent_2.get("research_topics_investigated", [])
-    story.append(Paragraph(f"Research topics investigated ({len(topics)}): {', '.join(topics)}", STYLES["Normal"]))
+    story.append(Paragraph(f"Research topics investigated ({len(topics)}): {', '.join(t or '?' for t in topics)}", STYLES["Normal"]))
     story.append(Spacer(1, 8))
 
     story.append(Paragraph("Breakthrough findings", STYLES["Heading2"]))
@@ -239,8 +239,8 @@ def _section_2(agent_x: Optional[Dict[str, Any]], agent_v: Optional[Dict[str, An
     story += _not_run("Agent X")
   else:
     story.append(Paragraph(
-        f"Domain: {escape(agent_x.get('domain', '?'))} | "
-        f"Simulation mode: {escape(agent_x.get('simulation_mode', '?'))} | "
+        f"Domain: {escape(agent_x.get('domain') or '?')} | "
+        f"Simulation mode: {escape(agent_x.get('simulation_mode') or '?')} | "
         f"Requires human review: {agent_x.get('requires_human_review')}",
         STYLES["Normal"],
     ))
@@ -325,7 +325,7 @@ def _section_4(agent_4: Optional[Dict[str, Any]]) -> List[Any]:
   if agent_4 is None:
     return story + _not_run("Agent 4")
 
-  story.append(Paragraph(escape(agent_4.get("scope_note", "")), STYLES["Note"]))
+  story.append(Paragraph(escape(agent_4.get("scope_note") or ""), STYLES["Note"]))
   story.append(Spacer(1, 8))
 
   story.append(Paragraph("Freedom-to-Operate screen", STYLES["Heading2"]))
@@ -347,7 +347,10 @@ def _section_4(agent_4: Optional[Dict[str, Any]]) -> List[Any]:
   story.append(Spacer(1, 8))
 
   review = agent_4.get("requires_legal_review", [])
-  story.append(Paragraph(f"Requires legal review: {', '.join(review) if review else 'none flagged'}", STYLES["Normal"]))
+  story.append(Paragraph(
+      f"Requires legal review: {', '.join(g or '?' for g in review) if review else 'none flagged'}",
+      STYLES["Normal"],
+  ))
 
   return story
 

@@ -100,13 +100,16 @@ Remember: this is a preliminary screening, not a legal opinion.
     lines = [
         "# IP-Freedom & LCA Audit",
         "",
-        f"> {result.get('scope_note', 'Preliminary screening only -- not a legal FTO opinion.')}",
+        f"> {result.get('scope_note') or 'Preliminary screening only -- not a legal FTO opinion.'}",
         "",
         "## Freedom-to-Operate Screen",
     ]
     for entry in result.get("fto_screen", []):
-      lines.append(f"### {entry.get('grade_name', 'Unnamed grade')}")
-      lines.append(entry.get("risk_note", ""))
+      lines.append(f"### {entry.get('grade_name') or 'Unnamed grade'}")
+      # Appended raw (not through an f-string) -- a null risk_note would
+      # otherwise crash the final "\n".join(lines) below with a TypeError,
+      # not a clean error, failing this agent's own output generation.
+      lines.append(entry.get("risk_note") or "")
       for hit in entry.get("public_patent_hits", []):
         lines.append(f"- {hit}")
       lines.append("")
